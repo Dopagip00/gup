@@ -28,3 +28,8 @@
 后续沿用原仓库和研究程序，不需重新开发或让电脑常开。不修改Dopagip00.github.io主页仓库；ashare-cloud只保留历史原型，不继续Sites发布。
 
 本机ashare-github当前保留完整gzip及本次生成的配套分片；公开seed原有远端字节未变，未把本机gzip校验值冒充远端值。研究源码按归一LF的Git blob SHA与远端逐一核对后重建engine；后续先改ashare-platform并测试，再运行prepare_source.py同步，审查公开文件后提交同一gup仓库。Git历史与授权不随个人迁移包复制。
+
+## 跨次自动更新验收
+
+第二次来源提交469e425c3ece3c56aab026b31c6f303fe03da59b自动触发运行39124348820：https://github.com/Dopagip00/gup/actions/runs/39124348820 。research、deploy、fundamentals、deploy-longterm再次全部success。research日志确认已从前一次运行成功下载研究缓存和独立日报artifact，再按真实周日时间publish=closed；研究缓存重新上传58,615,597字节，网站再次部署成功。由此实际验证源码提交自动发布、跨次缓存恢复与重复发布；仍不将此等同于尚未发生的交易日08/09定时采集验收。
+
