@@ -1,4 +1,4 @@
-param([switch]$Background)
+﻿param([switch]$Background)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'runtime.ps1')
 $python = Get-PlatformPython

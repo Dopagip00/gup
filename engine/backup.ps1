@@ -1,4 +1,4 @@
-param([string]$Output, [switch]$CodeOnly)
+﻿param([string]$Output, [switch]$CodeOnly)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'runtime.ps1')
 $platformPython = Get-PlatformPython

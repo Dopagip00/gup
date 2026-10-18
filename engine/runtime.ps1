@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $env:PYTHONUTF8='1'
 function Get-PlatformPython {
     $portable = Join-Path $PSScriptRoot 'runtime\python.exe'

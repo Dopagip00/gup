@@ -1,6 +1,6 @@
 # 沪研 GitHub 云端适配
 
-目标仓库 `Dopagip00/gup`，计划网站 `https://dopagip00.github.io/gup/`。持有者已确认公开研究网站及仓库改名，目前源码尚未上传、网站尚未部署。GitHub Pages 为公开静态网站，原“仅本人登录查看”需求已由持有者的新选择替代。
+现有仓库 `Dopagip00/gup`，网站地址 `https://dopagip00.github.io/gup/`。源码和公开研究种子已上传，发布和运行的实际验收记录见 `DEPLOYMENT_STATUS.md`。GitHub Pages 为公开静态网站，原“仅本人登录查看”需求已由持有者的新选择替代。
 
 GitHub Actions 使用 UTC cron，在北京时间每周一至周五08:00采集、09:00发布，运行时再依据上交所正式日历跳过休市日。Actions 可能排队、延迟，不能保证09:00整点通知；站点显示真实生成时间。09:30起不再新生成当日买入推荐，只保存真实晚发日报和前日建议的卖出参考。没有当日早间研究完成证明、同日估值、已核验来源新闻或合格模型，就不推荐新买入。
 
@@ -30,9 +30,11 @@ GitHub Actions 使用 UTC cron，在北京时间每周一至周五08:00采集、
 
 1. 将这些源码和公开seed放入持有者已确认的仓库，不上传本机数据库、聊天、密码、Cookies或令牌。
 2. 仓库 Settings → Pages → Source 选择 GitHub Actions。
-3. 确认 GitHub Actions 已启用，在 Actions variables 设置 `ENABLE_SCHEDULED_RESEARCH=true`、`ENABLE_PAGES_DEPLOY=true`；未设置时定时任务和对外部署默认关闭。
+3. 确认 GitHub Actions 已启用。用户已授权的 `Dopagip00/gup` 默认分支会自动研究和发布，无需预先创建变量；其他仓库、分支和标签不能运行研究或部署。可将 Actions variable `ENABLE_SCHEDULED_RESEARCH=false` 暂停定时及源码提交触发的研究，仍允许默认分支手动恢复；`ENABLE_PAGES_DEPLOY=false` 暂停所有 Pages 部署。显式设置为 `true` 也可启用。
 4. 手动运行 `collect`，检查全市场覆盖、新闻状态及研究artifact，再运行 `publish`。真实时间超过09:30时，没有新买建议属于正常保护。
 5. 核验实际Actions触发时间、Pages访问、日报日期和发布时刻后，才可声称云端更新已工作。GitHub可能因仓库长期不活跃停用定时工作流，需要定期核验Actions状态。
+
+默认分支的研究源码、静态资源、seed、测试或工作流修改会触发真实时间的 `publish`，沿用相同的交易日和发布时间保护；完成后继续现有长线更新链。README 和 `research/daily-plans.json` 的提交不触发这条自动发布，避免日报归档循环。定时仍只有北京时间08:00和09:00两个时点。
 
 托管与定时行为以 [GitHub Pages说明](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages) 和 [GitHub Actions schedule说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule) 为准。
 

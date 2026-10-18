@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Package, [int]$Port=8765)
+﻿param([Parameter(Mandatory=$true)][string]$Package, [int]$Port=8765)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'runtime.ps1')
 $platformPython = Get-PlatformPython

@@ -1,4 +1,4 @@
-param([int]$Port=8765)
+﻿param([int]$Port=8765)
 $ErrorActionPreference='Stop'
 $base='http://127.0.0.1:'+ $Port
 try { $health=Invoke-RestMethod -Uri ($base+'/api/health') -TimeoutSec 3 } catch { Write-Output '本地平台未运行。'; exit 0 }

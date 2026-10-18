@@ -1,6 +1,16 @@
 name: Shanghai research and Pages
 
 on:
+  push:
+    # The job below admits only the repository's current default branch.
+    branches: ['**']
+    paths:
+      - '.github/workflows/research.yml'
+      - '*.py'
+      - 'pages.js'
+      - 'engine/**'
+      - 'seed/**'
+      - 'tests/**'
   schedule:
     # GitHub cron uses UTC: these are 08:00 and 09:00 Asia/Shanghai.
     - cron: '0 0 * * 1-5'
@@ -22,8 +32,9 @@ concurrency:
 
 jobs:
   research:
-    # Enable only after the owner has confirmed public research hosting.
-    if: (vars.ENABLE_SCHEDULED_RESEARCH == 'true' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    # Public hosting is authorized only for this repository. Explicit false pauses
+    # automatic research; manual default-branch runs remain available.
+    if: github.repository == 'Dopagip00/gup' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (vars.ENABLE_SCHEDULED_RESEARCH != 'false' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     permissions:
@@ -87,7 +98,7 @@ jobs:
           --restore-plans .cache/plans-restored --plans-output .cache/plans-export
           --seed seed/research.json.gz --output-dir public
       - name: Commit changed public advice archive with optimistic concurrency protection
-        if: steps.research.outputs.site_ready == 'true' && (github.event.schedule == '0 1 * * 1-5' || github.event.inputs.stage == 'publish')
+        if: steps.research.outputs.site_ready == 'true' && (github.event_name == 'push' || github.event.schedule == '0 1 * * 1-5' || github.event.inputs.stage == 'publish')
         uses: actions/github-script@v7
         env:
           PLANS_BASE_SHA: ${{ steps.cache.outputs.plans_base_sha }}
@@ -115,6 +126,7 @@ jobs:
           path: |
             .cache/export/research.sqlite3
             .cache/export/cache-meta.json
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 1
           compression-level: 6
@@ -124,6 +136,7 @@ jobs:
         with:
           name: huyan-daily-plans
           path: .cache/plans-export/daily-plans.json
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 90
           compression-level: 6
@@ -133,7 +146,7 @@ jobs:
         with:
           path: public
   deploy:
-    if: needs.research.outputs.site_ready == 'true' && vars.ENABLE_PAGES_DEPLOY == 'true'
+    if: github.repository == 'Dopagip00/gup' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && needs.research.outputs.site_ready == 'true' && vars.ENABLE_PAGES_DEPLOY != 'false'
     needs: research
     runs-on: ubuntu-latest
     permissions:
@@ -147,8 +160,8 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
   fundamentals:
-    # Same 09:00 trigger, AFTER the short-term site is deployed; no extra clock.
-    if: needs.deploy.result == 'success' && (github.event.schedule == '0 1 * * 1-5' || github.event.inputs.stage == 'publish')
+    # Continue the same publish run AFTER deployment; no extra clock.
+    if: needs.deploy.result == 'success' && (github.event_name == 'push' || github.event.schedule == '0 1 * * 1-5' || github.event.inputs.stage == 'publish')
     needs: [research, deploy]
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -188,6 +201,7 @@ jobs:
           path: |
             .cache/financial-export/research.sqlite3
             .cache/financial-export/cache-meta.json
+          include-hidden-files: true
           retention-days: 1
           compression-level: 6
       - name: Preserve the complete public daily-advice archive after financial research
@@ -196,6 +210,7 @@ jobs:
         with:
           name: huyan-daily-plans-financial
           path: .cache/financial-plans-export/daily-plans.json
+          include-hidden-files: true
           retention-days: 90
           compression-level: 6
       - name: Package the site with updated long-term research
@@ -205,7 +220,7 @@ jobs:
           name: github-pages-longterm
           path: public
   deploy-longterm:
-    if: needs.fundamentals.outputs.site_ready == 'true' && vars.ENABLE_PAGES_DEPLOY == 'true'
+    if: github.repository == 'Dopagip00/gup' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && needs.fundamentals.outputs.site_ready == 'true' && vars.ENABLE_PAGES_DEPLOY != 'false'
     needs: fundamentals
     runs-on: ubuntu-latest
     permissions:
