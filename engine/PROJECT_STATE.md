@@ -12,7 +12,9 @@
 - 数据：data/market.sqlite3，SQLite WAL，一致备份使用portability.py。完整备份保留数据；export-update/apply-update仅更改代码，更新前自动备份且不覆盖data。
 - 当前发布目标为相邻ashare-github：用户已明确同意把空仓库Dopagip00/deng.github.io改名为gup，并公开发布研究数据，目标网址https://dopagip00.github.io/gup/。此前仅本人登录的要求已由本次公开授权替换；普通GitHub Pages不提供这一私人访问承诺。
 - GitHub适配沿用本机研究引擎，由prepare_source.py复制engine并从白名单公开研究表/键生成seed/research.json.gz；不上传本机SQLite、真实账户、私人配置、密码、Cookies或令牌。08:00采集与09:00发布由GitHub Actions执行，交易日由SSE日历再次核验；Actions可能排队延迟，不保证精确09:00。迟于09:30不新生成当天买入建议，保留旧建议的卖出参考。
-- 本文更新时尚未确认GitHub改名、上传、Pages部署或有效调度。接续需分别核对仓库、Pages实际URL、Actions变量/日志、公开数据内容与日报真实发布时间，不能将源码就绪当作已上线。后续验收结果以实际部署记录补充。
+- 2026-10-18晚维护验收：GitHub账号Dopagip00及gup管理/写权限已核实；源码与公开seed已存在。修复提交0cb306fc8501d0fe9ea2020b2ba1dc1a15832c20已进入main，Actions push运行39123921471的research、deploy、fundamentals、deploy-longterm全部success。网站https://dopagip00.github.io/gup/已实际访问，manifest真实生成时间2026-10-18T19:38:27+08:00，行情日2026-10-16、2321详情（含指数），当日closed。首次发布及同次缓存恢复已验收；真正交易日08/09定时触发、外部采集及合格日报仍待后续真实记录，不把周日closed当作采集成功。
+- 当前工作流仅对Dopagip00/gup的动态默认分支默认启用；源码push会自动publish，research/daily-plans.json及根README提交不触发，避免归档循环。ENABLE_SCHEDULED_RESEARCH=false停止定时/push自动研究，手动恢复仍可运行；ENABLE_PAGES_DEPLOY=false停止全部部署。仅两个原定08/09 cron，交易日/09:30门槛不变。四个.cache白名单产物已显式允许隐藏目录上传，实际研究缓存压缩58,615,596字节、保留1天；日报240字节、保留90天。详见相邻ashare-github/DEPLOYMENT_STATUS.md。
+- 本机启动已修复：全部9个ps1采用UTF-8 BOM兼容Windows PowerShell5.1；根和平台启动cmd支持透传参数。Windows PowerShell5.1解析9/9、根入口真实启动/重复启动及健康/首页/数据接口均通过；便携Python3.12.10标准库可用，不需额外安装。原始文件与验收记录保留在根backups/local-startup-fix-20261018-192630。
 - 后续改动先修改ashare-platform并测试，再在ashare-github运行python prepare_source.py --platform ../ashare-platform，检查只含公开研究内容后提交push到同一仓库。无需在新电脑重做平台；网站正常运行后，迁移电脑不需要重建云端任务。
 - ashare-cloud为保留的Vinext/Cloudflare Worker/D1历史原型，原.openai/hosting.json绑定appgprj_6ad41f66c1808191a7c13d7fc4b3f00b及预注册地址保留。此前构建检查通过，但尚未部署、初始化D1或注册08/09任务。当前不继续Sites发布，不再create_site，也不为其新建任务。
 - 完整迁移包包含本机一致快照、GitHub源码/公开seed及历史cloud源码。GitHub的engine可从本机源码重建，state/public及Actions产物不当成迁移来源；最新云端日报与研究artifact需从原仓库独立获取。聊天、授权、Cookies及令牌不进入归档，新电脑通过服务本身重新登录。

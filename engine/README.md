@@ -4,9 +4,9 @@
 
 ## 当前交付状态与访问
 
-当前目标为GitHub公开研究网站，仓库 `Dopagip00/gup`，网站 `https://dopagip00.github.io/gup/`。用户已同意将原空仓库改名并公开研究数据。更新由GitHub Actions执行，实际启用后无需电脑常开；本机目录保留研究程序、数据和开发工具。
+GitHub公开研究网站现已首次发布，仓库 `Dopagip00/gup`，网站 `https://dopagip00.github.io/gup/`。用户已同意公开研究数据。云端更新由GitHub Actions执行，无需电脑常开；本机目录保留研究程序、数据和开发工具。
 
-目标网址：[沪研研究站](https://dopagip00.github.io/gup/)。**目标地址不代表网站已部署，也不代表任务已生效。** 应分别核验仓库、Pages部署、实际页面、Actions触发日志与日报发布时间；本说明不作上线或调度完成的声明。
+访问网址：[沪研研究站](https://dopagip00.github.io/gup/)。2026-10-18首次源码提交触发的四阶段Actions已全部通过，实际页面与线上manifest已核验，周日正确显示休市。默认分支源码更新会自动发布；北京时间交易日08:00采集、09:00日报已配置，真正定时触发与交易日采集结果仍以随后实际日志和日报为准。详情见 `PROJECT_STATE.md` 及相邻 `ashare-github/DEPLOYMENT_STATUS.md`。
 
 普通GitHub Pages是公开静态托管，手机无需个人登录即可访问，不再承诺仅本人查看。只发布清理后的行情、资讯、财务与模型研究；不上传本机完整SQLite、个人配置、账户资料、聊天、Cookies或密钥。完整迁移ZIP含本机数据，是个人备份，不应上传到公开仓库。GitHub操作授权通过服务登录处理，迁移包不复制授权。
 
