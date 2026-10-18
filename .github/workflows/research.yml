@@ -1,0 +1,222 @@
+name: Shanghai research and Pages
+
+on:
+  schedule:
+    # GitHub cron uses UTC: these are 08:00 and 09:00 Asia/Shanghai.
+    - cron: '0 0 * * 1-5'
+    - cron: '0 1 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Run collection or publish the current session report'
+        required: true
+        type: choice
+        options: [collect, publish, fundamentals]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: huyan-research-state
+  cancel-in-progress: false
+
+jobs:
+  research:
+    # Enable only after the owner has confirmed public research hosting.
+    if: (vars.ENABLE_SCHEDULED_RESEARCH == 'true' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      site_ready: ${{ steps.research.outputs.site_ready }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Locate the latest successful persistent research artifact
+        id: cache
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100
+            });
+            const selected = artifacts.filter(a => ['huyan-research-cache','huyan-research-cache-financial'].includes(a.name) && !a.expired && a.workflow_run?.head_branch === context.payload.repository.default_branch)
+              .sort((a,b) => b.created_at.localeCompare(a.created_at))[0];
+            if (selected) {
+              core.setOutput('run_id', String(selected.workflow_run.id));
+              core.setOutput('name', selected.name);
+            }
+            const plans = artifacts.filter(a => ['huyan-daily-plans','huyan-daily-plans-financial'].includes(a.name) && !a.expired && a.workflow_run?.head_branch === context.payload.repository.default_branch)
+              .sort((a,b) => b.created_at.localeCompare(a.created_at))[0];
+            if (plans) {
+              core.setOutput('plans_run_id', String(plans.workflow_run.id));
+              core.setOutput('plans_name', plans.name);
+            }
+            const fs = require('node:fs'), crypto = require('node:crypto');
+            const path = 'research/daily-plans.json';
+            const bytes = fs.existsSync(path) ? fs.readFileSync(path) : null;
+            core.setOutput('plans_base_sha', bytes ? crypto.createHash('sha1').update(Buffer.from('blob ' + bytes.length + '\0')).update(bytes).digest('hex') : 'missing');
+      - name: Restore the previous stage's public research state
+        if: steps.cache.outputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.cache.outputs.name }}
+          path: .cache/restored
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.cache.outputs.run_id }}
+      - name: Restore the durable daily-advice archive independently of the 1-day cache
+        if: steps.cache.outputs.plans_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.cache.outputs.plans_name }}
+          path: .cache/plans-restored
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.cache.outputs.plans_run_id }}
+      - name: Collect or publish using actual Beijing time
+        id: research
+        env:
+          RESEARCH_STAGE: ${{ github.event.inputs.stage || (github.event.schedule == '0 0 * * 1-5' && 'collect' || 'publish') }}
+        run: >-
+          python runner.py "$RESEARCH_STAGE"
+          --engine-dir engine --state-dir .state
+          --restore-cache .cache/restored --cache-output .cache/export
+          --restore-plans .cache/plans-restored --plans-output .cache/plans-export
+          --seed seed/research.json.gz --output-dir public
+      - name: Commit changed public advice archive with optimistic concurrency protection
+        if: steps.research.outputs.site_ready == 'true' && (github.event.schedule == '0 1 * * 1-5' || github.event.inputs.stage == 'publish')
+        uses: actions/github-script@v7
+        env:
+          PLANS_BASE_SHA: ${{ steps.cache.outputs.plans_base_sha }}
+        with:
+          script: |
+            const fs = require('node:fs'), crypto = require('node:crypto');
+            const path = 'research/daily-plans.json', bytes = fs.readFileSync(path);
+            const localSha = crypto.createHash('sha1').update(Buffer.from('blob ' + bytes.length + '\0')).update(bytes).digest('hex');
+            const owner = context.repo.owner, repo = context.repo.repo, branch = context.payload.repository.default_branch;
+            let remote = null;
+            try { remote = (await github.rest.repos.getContent({owner,repo,path,ref:branch})).data; }
+            catch (error) { if (error.status !== 404) throw error; }
+            if (remote?.sha === localSha) { core.info('Public advice unchanged; no commit.'); return; }
+            if ((remote?.sha || 'missing') !== process.env.PLANS_BASE_SHA) {
+              throw new Error('Advice archive changed remotely. Refusing replacement; rerun with the latest checkout.');
+            }
+            await github.rest.repos.createOrUpdateFileContents({owner,repo,path,branch,
+              message:'Update immutable public daily research archive', content:bytes.toString('base64'),
+              ...(remote ? {sha:remote.sha} : {})});
+      - name: Persist only sanitized public research data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: huyan-research-cache
+          path: |
+            .cache/export/research.sqlite3
+            .cache/export/cache-meta.json
+          if-no-files-found: warn
+          retention-days: 1
+          compression-level: 6
+      - name: Back up the complete public daily-advice archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: huyan-daily-plans
+          path: .cache/plans-export/daily-plans.json
+          if-no-files-found: warn
+          retention-days: 90
+          compression-level: 6
+      - name: Package the static research site
+        if: steps.research.outputs.site_ready == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+  deploy:
+    if: needs.research.outputs.site_ready == 'true' && vars.ENABLE_PAGES_DEPLOY == 'true'
+    needs: research
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy static research to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+  fundamentals:
+    # Same 09:00 trigger, AFTER the short-term site is deployed; no extra clock.
+    if: needs.deploy.result == 'success' && (github.event.schedule == '0 1 * * 1-5' || github.event.inputs.stage == 'publish')
+    needs: [research, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      site_ready: ${{ steps.finance.outputs.site_ready }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore this run's published research and immutable daily plan
+        uses: actions/download-artifact@v4
+        with:
+          name: huyan-research-cache
+          path: .cache/restored
+      - name: Restore this run's complete daily-advice archive
+        uses: actions/download-artifact@v4
+        with:
+          name: huyan-daily-plans
+          path: .cache/plans-restored
+      - name: Update long-term fundamentals without publishing a new daily plan
+        id: finance
+        run: >-
+          python runner.py fundamentals
+          --engine-dir engine --state-dir .state
+          --restore-cache .cache/restored --cache-output .cache/financial-export
+          --restore-plans .cache/plans-restored --plans-output .cache/financial-plans-export
+          --seed seed/research.json.gz --output-dir public
+      - name: Persist updated public financial research
+        if: always() && steps.finance.outputs.site_ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: huyan-research-cache-financial
+          path: |
+            .cache/financial-export/research.sqlite3
+            .cache/financial-export/cache-meta.json
+          retention-days: 1
+          compression-level: 6
+      - name: Preserve the complete public daily-advice archive after financial research
+        if: always() && steps.finance.outputs.site_ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: huyan-daily-plans-financial
+          path: .cache/financial-plans-export/daily-plans.json
+          retention-days: 90
+          compression-level: 6
+      - name: Package the site with updated long-term research
+        if: steps.finance.outputs.site_ready == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: github-pages-longterm
+          path: public
+  deploy-longterm:
+    if: needs.fundamentals.outputs.site_ready == 'true' && vars.ENABLE_PAGES_DEPLOY == 'true'
+    needs: fundamentals
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy updated long-term section
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-longterm

@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "source": "research.json.gz",
+  "compression": "gzip",
+  "chunk_bytes": 4194304,
+  "total_bytes": 60171778,
+  "sha256": "69f696c32b251877be6e801c775a81dfeff8afff9a5e04db88ebdb7d54479fda",
+  "parts": [
+    {
+      "name": "research.part000.bin",
+      "size": 4194304,
+      "sha256": "af227ecc40dec1c01c188d8c962a6fb8902985ad0e0141a3d01aa6ec5b9701ca"
+    },
+    {
+      "name": "research.part001.bin",
+      "size": 4194304,
+      "sha256": "c92d99d1c4b93993cdb7f125ece9a18db514d054d82f541fe05f174e819101d4"
+    },
+    {
+      "name": "research.part002.bin",
+      "size": 4194304,
+      "sha256": "05a8e0b4708f2b8a50841a9664df69aced7f2afdeb5d6a72d5cab80655b21ed8"
+    },
+    {
+      "name": "research.part003.bin",
+      "size": 4194304,
+      "sha256": "a0ba3282fea9a6451080bf7f8972aa5427d2b8df411301a0e7dc40233ec286b6"
+    },
+    {
+      "name": "research.part004.bin",
+      "size": 4194304,
+      "sha256": "e3af6a0cb188999e0b4ce2d8ac476ea895ff68bedb7e932720bfb3b4ea87ddaf"
+    },
+    {
+      "name": "research.part005.bin",
+      "size": 4194304,
+      "sha256": "4c3188cd8691dc73bf0ecea1627e01befab3f6445daa51f7b6f197e44f2765a5"
+    },
+    {
+      "name": "research.part006.bin",
+      "size": 4194304,
+      "sha256": "886e8d6240e02baa31d14082655572d25f706d5fbd02714b6530da833a8a4d10"
+    },
+    {
+      "name": "research.part007.bin",
+      "size": 4194304,
+      "sha256": "8d0a89ba94a694542676d0fa97d5a9424d3d36823661083c96677915736074e1"
+    },
+    {
+      "name": "research.part008.bin",
+      "size": 4194304,
+      "sha256": "34da7a956840c17f3650a7f6491684888ac31c3ffd580164d29b4df8c6a90797"
+    },
+    {
+      "name": "research.part009.bin",
+      "size": 4194304,
+      "sha256": "c44fb67a8f0e385797c855ef04aef9454742aff653090975d1cd232a58600170"
+    },
+    {
+      "name": "research.part010.bin",
+      "size": 4194304,
+      "sha256": "3bad6da09d63363fc33456060442ec259c3be7208a8d76f4004f3e971e32ff39"
+    },
+    {
+      "name": "research.part011.bin",
+      "size": 4194304,
+      "sha256": "4664a2f731ff57dba17247d089b0a68f4083313c74a6f60d6ca5e64e2815ca5d"
+    },
+    {
+      "name": "research.part012.bin",
+      "size": 4194304,
+      "sha256": "023d8ea32ccb43a94d6623341c84205a15b224ec59eacad74be13fa7fbcbaa89"
+    },
+    {
+      "name": "research.part013.bin",
+      "size": 4194304,
+      "sha256": "44f0773840df35c577bd529b8472ae651cc415269ac36eb61a199bfd128c630d"
+    },
+    {
+      "name": "research.part014.bin",
+      "size": 1451522,
+      "sha256": "91404dc33755f07f19902bf84b5dd83d9a0356d283a18881b2ca00a562037de7"
+    }
+  ]
+}

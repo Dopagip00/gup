@@ -12,7 +12,8 @@ GitHub Actions 使用 UTC cron，在北京时间每周一至周五08:00采集、
 - `runner.py`：定时 `collect`、`publish` 与手动 `fundamentals` 阶段，均使用真实北京时间；不提供伪造历史运行时刻的命令参数。
 - `news_collector.py`：`collect(now) -> morning_news`，包括 `date/status/as_of/items/risk_exclusions`，新闻至少有标题、HTTPS原始来源和真实发布时间。缺采集器、缺来源或核验失败标为unavailable。
 - `export_static.py`：`export_site(output_dir, service, engine_dir=Path) -> metadata`，只导出公开研究JSON、静态网页及必要资源；页面没有Python服务端，也不执行采集。
-- `seed/research.json.gz`：首次运行的公开研究初始化文件。
+- `seed/research.json.gz`：本机及完整迁移包保留的公开研究初始化文件；完整gzip不提交仓库。
+- `seed/research.json.gz.parts.json` 和 `seed/research.part000.bin` 等：GitHub首次运行使用的相同gzip字节流，按4 MiB无损分片，末片可较小。清单记录顺序、大小及每片和完整gzip的SHA-256；必须同时保留清单与全部分片。恢复时优先读取本机完整gzip；缺少完整文件时，先逐片校验及重组，全部通过后再按相同研究白名单加载。缺片、改动、非法路径或重复顺序都会中止，不静默跳过。
 - `.state/`：当前Actions运行的工作数据库，不能提交或直接上传。
 - `.cache/export/`：严格清理后的跨运行研究artifact，仅含 `research.sqlite3` 和 `cache-meta.json`。
 - `research/daily-plans.json`：完整公开建议历史的确定性档案，09点发布后由工作流提交到本仓库；无变化不提交。
