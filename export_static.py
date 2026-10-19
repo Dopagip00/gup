@@ -12,7 +12,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 META_KEYS = {'app_name','now','status','last_success','data_date','report_date','expected_date','stale',
              'universe','coverage','mode','schedule','next_run','warnings','daily_buy',
-             'daily_plan_status','daily_plan_message','exclusion_policy'}
+             'daily_plan_status','daily_plan_message','exclusion_policy','model_quality'}
 
 
 def public_dashboard(value):
@@ -21,7 +21,8 @@ def public_dashboard(value):
                   'exclusion_reason','stale','signal','entry_low','entry_high','stop_loss','take_profit','research_levels'}
     prediction_keys = {'available','eligible','horizon_days','horizon','return_basis','return_definition',
                        'expected_return_pct','interval_low_pct','interval_high_pct','validation_mae_pct',
-                       'validation_samples','rank_value','raw_rank_value'}
+                       'validation_samples','rank_value','raw_rank_value','model_version','validation_protocol',
+                       'validation_protocol_complete','validation_aggregate','cost_stress_return_pct','round_trip_cost_stress_pct'}
     result['stocks'] = [{**{k:v for k,v in s.items() if k in table_keys},
         'prediction':{k:v for k,v in (s.get('prediction') or {}).items() if k in prediction_keys}}
         for s in result.get('stocks') or []]
@@ -42,6 +43,7 @@ def public_dashboard(value):
 def export_site(output_dir, service, engine_dir=None):
     import core
     import daily_plan
+    import forecast_audit
     output = Path(output_dir).resolve()
     engine = Path(engine_dir or core.BASE).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -80,6 +82,7 @@ def export_site(output_dir, service, engine_dir=None):
     dashboard = public_dashboard(full_dashboard)
     write('data/dashboard.json',dashboard)
     write('data/daily-plan.json',daily_plan.read())
+    write('data/forecast-audit.json',forecast_audit.evaluate(core))
     write('data/longterm.json',service.longterm())
     write('data/quotes.json',{'quotes':[], 'status':'GitHub Pages 为收盘研究快照，不提供实时或盘中自动报价。'})
     write('data/config.json',{'hosted':True,'universe':'shanghai','watchlist':[],'refresh_minutes':5})

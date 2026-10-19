@@ -30,12 +30,16 @@ SSE_PAGE = 'https://www.sse.com.cn/disclosure/listedinfo/announcement/'
 SSE_API = 'https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do'
 CCTV_PAGE = 'https://finance.cctv.com/'
 LOOKBACK_DAYS = 4
+MAX_LOOKBACK_DAYS = 31
 PAGE_SIZE = 100
 MAX_PAGES = 80
 MAX_ARTICLES = 16
 MAX_ITEMS = 200
 MAX_BYTES = 8 * 1024 * 1024
-ALLOWED_HOSTS = {'www.sse.com.cn', 'query.sse.com.cn', 'static.sse.com.cn', 'finance.cctv.com'}
+SSE_HOSTS = {'www.sse.com.cn', 'query.sse.com.cn', 'static.sse.com.cn'}
+SSE_DOCUMENT_HOSTS = {'www.sse.com.cn', 'static.sse.com.cn'}
+CCTV_HOSTS = {'finance.cctv.com'}
+ALLOWED_HOSTS = SSE_HOSTS | CCTV_HOSTS
 ARTICLE_PATH = re.compile(r'^/(\d{4})/(\d{2})/(\d{2})/ARTI[A-Za-z0-9]+\.shtml$')
 SSE_CODE = re.compile(r'^(?:60\d{4}|68\d{4})$')
 
@@ -55,6 +59,27 @@ def _window(value):
     return dt.time(8) <= value.time().replace(tzinfo=None) < dt.time(9, 30)
 
 
+def _coverage_start(moment, value=None):
+    """Cover at least four days, including a supplied last completed session.
+
+    The caller must derive that session from the official trading calendar.  A
+    bounded interval prevents an unknown/stale calendar from quietly requesting
+    a huge scan and being described as current news coverage.
+    """
+    start = moment.date() - dt.timedelta(days=LOOKBACK_DAYS)
+    if value is not None:
+        if isinstance(value, dt.datetime):
+            raise ValueError('coverage_start must be a calendar date, not a timestamp')
+        try:
+            supplied = value if isinstance(value, dt.date) else dt.date.fromisoformat(str(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError('coverage_start must be an ISO calendar date') from exc
+        if supplied > moment.date() or supplied < moment.date() - dt.timedelta(days=MAX_LOOKBACK_DAYS):
+            raise ValueError('coverage_start is future-dated or older than the supported news window')
+        start = min(start, supplied)
+    return start
+
+
 def _https(value, base, allowed=ALLOWED_HOSTS):
     url = urllib.parse.urljoin(base, str(value or '').strip())
     try:
@@ -71,13 +96,16 @@ def _https(value, base, allowed=ALLOWED_HOSTS):
 
 
 def _get(url, referer):
-    url = _https(url, referer)
+    # A redirect to a different approved publisher is still a source mismatch.
+    # Never label a CCTV response as an SSE announcement, or vice versa.
+    hosts = SSE_HOSTS if urllib.parse.urlsplit(referer).hostname in SSE_HOSTS else CCTV_HOSTS
+    url = _https(url, referer, hosts)
     headers = {'User-Agent': 'Mozilla/5.0 (compatible; HuyanResearch/2.1)',
                'Accept': 'application/json,text/html;q=0.9,*/*;q=0.5', 'Referer': referer}
     for attempt in range(2):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=12) as response:
-                _https(response.geturl(), referer)
+                _https(response.geturl(), referer, hosts)
                 data = response.read(MAX_BYTES + 1)
             if len(data) > MAX_BYTES:
                 raise NewsError('publisher response exceeded size limit')
@@ -90,7 +118,7 @@ def _get(url, referer):
     raise NewsError('source request failed')
 
 
-def _dated(value, moment):
+def _dated(value, moment, window_start=None):
     text = str(value or '').strip()
     precision = 'date' if re.fullmatch(r'\d{4}-\d{2}-\d{2}', text) else 'second'
     try:
@@ -100,7 +128,7 @@ def _dated(value, moment):
     if not parsed.tzinfo:
         parsed = parsed.replace(tzinfo=CHINA)
     parsed = parsed.astimezone(CHINA)
-    cutoff = dt.datetime.combine(moment.date() - dt.timedelta(days=LOOKBACK_DAYS), dt.time(), CHINA)
+    cutoff = dt.datetime.combine(_coverage_start(moment, window_start), dt.time(), CHINA)
     if not cutoff <= parsed <= moment:
         return None, precision
     # Preserve date-only precision; do not invent an actual midnight publication.
@@ -119,7 +147,7 @@ def _rows(value):
             raise NewsError('SSE announcement row has an unknown format')
 
 
-def parse_announcements(payload, moment):
+def parse_announcements(payload, moment, window_start=None):
     """Parse the official grouped JSON, preserving date-only source precision."""
     moment = _moment(moment)
     if not isinstance(payload, dict) or 'result' not in payload:
@@ -132,16 +160,17 @@ def parse_announcements(payload, moment):
             continue
         try:
             title = unescape(str(row.get('TITLE') or '')).strip()
-            published, precision = _dated(row.get('SSEDATE'), moment)
+            published, precision = _dated(row.get('SSEDATE'), moment, window_start)
             if not title:
                 raise NewsError('SSE announcement title is missing')
-            url = _https(row.get('URL'), SSE_PAGE)
+            url = _https(row.get('URL'), SSE_PAGE, SSE_DOCUMENT_HOSTS)
             if not row.get('URL'):
                 raise NewsError('SSE announcement document URL is missing')
             if published:
                 items.append({'title': title, 'url': url, 'published_at': published,
                               'published_precision': precision, 'source': '上海证券交易所·上市公司公告',
                               'kind': 'announcement', 'symbol': 'sh' + code,
+                              'source_url': SSE_PAGE,
                               'company': str(row.get('SECURITY_NAME') or '').strip(),
                               'verification': '官方公告目录与披露日期；未自动核验PDF正文'})
         except NewsError:
@@ -149,10 +178,10 @@ def parse_announcements(payload, moment):
     return items, invalid
 
 
-def _sse(moment):
-    start = (moment.date() - dt.timedelta(days=LOOKBACK_DAYS)).isoformat()
+def _sse(moment, window_start=None):
+    start = _coverage_start(moment, window_start).isoformat()
     items, groups, total, pages, invalid = [], 0, None, 0, 0
-    page_fingerprints = set()
+    page_fingerprints, group_fingerprints = set(), set()
     for page in range(1, MAX_PAGES + 1):
         params = {'isPagination': 'true', 'pageHelp.pageSize': PAGE_SIZE,
                   'pageHelp.pageNo': page, 'pageHelp.beginPage': page,
@@ -163,7 +192,7 @@ def _sse(moment):
             payload = json.loads(_get(SSE_API + '?' + urllib.parse.urlencode(params), SSE_PAGE))
         except (json.JSONDecodeError, TypeError) as exc:
             raise NewsError('SSE returned invalid JSON') from exc
-        part, bad = parse_announcements(payload, moment)
+        part, bad = parse_announcements(payload, moment, start)
         info = payload.get('pageHelp')
         if not isinstance(info, dict):
             raise NewsError('SSE pagination metadata is missing')
@@ -186,6 +215,13 @@ def _sse(moment):
         if current_groups and fingerprint in page_fingerprints:
             raise NewsError('SSE repeated a page; announcement scan incomplete')
         page_fingerprints.add(fingerprint)
+        # Total counts alone cannot detect shifting offsets: A/B then B/C can
+        # have an unchanged total while omitting D.  Reject an overlapping group.
+        for group in payload['result']:
+            group_fingerprint = json.dumps(group, ensure_ascii=False, sort_keys=True)
+            if group_fingerprint in group_fingerprints:
+                raise NewsError('SSE repeated an announcement group; scan incomplete')
+            group_fingerprints.add(group_fingerprint)
         groups += current_groups
         pages += 1
         items.extend(part)
@@ -223,7 +259,7 @@ class _Links(HTMLParser):
             self.active = None
 
 
-def parse_cctv_links(html, moment):
+def parse_cctv_links(html, moment, window_start=None):
     """Only dated articles on the publisher's own HTTPS hostname are followed."""
     parser = _Links()
     parser.feed(html)
@@ -239,12 +275,12 @@ def parse_cctv_links(html, moment):
             day = dt.date(*map(int, match.groups()))
         except (NewsError, ValueError):
             continue
-        if moment.date() - dt.timedelta(days=LOOKBACK_DAYS) <= day <= moment.date():
+        if _coverage_start(moment, window_start) <= day <= moment.date():
             links[url] = title
     return sorted(links.items(), key=lambda pair: pair[0], reverse=True)[:MAX_ARTICLES]
 
 
-def parse_cctv_article(html, url, title, moment):
+def parse_cctv_article(html, url, title, moment, window_start=None):
     url = _https(url, CCTV_PAGE, {'finance.cctv.com'})
     # This is publisher-provided article metadata, not a date guessed from its URL.
     found = re.search(r'\b(?:var\s+)?publishDate\s*=\s*[\"\'](\d{14})[\"\']', html)
@@ -254,23 +290,25 @@ def parse_cctv_article(html, url, title, moment):
         published = dt.datetime.strptime(found[1], '%Y%m%d%H%M%S').replace(tzinfo=CHINA)
     except ValueError as exc:
         raise NewsError('CCTV article publication metadata is invalid') from exc
-    stamp, _ = _dated(published.isoformat(), moment)
+    stamp, _ = _dated(published.isoformat(), moment, window_start)
     if not stamp:
         return None
     return {'title': title, 'url': url, 'published_at': stamp, 'published_precision': 'second',
             'source': '央视网财经', 'kind': 'market_news',
+            'source_url': CCTV_PAGE,
             'verification': '发布者页面与文章发布时间；未独立核验报道中的全部事实'}
 
 
-def _cctv(moment):
-    links = parse_cctv_links(_get(CCTV_PAGE, CCTV_PAGE), moment)
+def _cctv(moment, window_start=None):
+    start = _coverage_start(moment, window_start).isoformat()
+    links = parse_cctv_links(_get(CCTV_PAGE, CCTV_PAGE), moment, start)
     if not links:
         raise NewsError('CCTV finance page has no recent parseable article links')
 
     def article(pair):
         url, title = pair
         try:
-            return parse_cctv_article(_get(url, CCTV_PAGE), url, title, moment), None
+            return parse_cctv_article(_get(url, CCTV_PAGE), url, title, moment, start), None
         except NewsError as exc:
             return None, str(exc)
 
@@ -283,15 +321,19 @@ def _cctv(moment):
     if not items:
         raise NewsError('CCTV finance articles are future-dated or outside lookback window')
     return items, {'source': '央视网财经', 'url': CCTV_PAGE, 'status': 'complete',
+                   'window_start': start, 'window_end': moment.date().isoformat(),
                    'articles_checked': len(links), 'accepted_items': len(items),
-                   'scope': '财经首页最多16条近期文章；不是全部财经新闻或实时快讯'}
+                   'scope': '财经首页最多16条近期文章；不是全部财经新闻或实时快讯',
+                   'selection': '首页文章按URL日期排序取样；同日文章URL顺序不代表发布时间先后'}
 
 
 def risk_exclusions(items):
     """Conservative vetoes from explicit official titles and structured codes.
 
     A macro headline or a guessed company-name match never creates a stock tag.
-    Titles mentioning removal/resumption are not treated as continuing risk.
+    A bare resumption/removal title is not continuing risk.  A title about a
+    suspension, delay of resumption or an application to remove a warning is
+    still a veto until the original document has been reviewed.
     This is a prompt for human review, not a finding from the unread PDF body.
     """
     risks = []
@@ -299,9 +341,10 @@ def risk_exclusions(items):
         if item.get('kind') != 'announcement' or not re.fullmatch(r'sh(?:60\d{4}|68\d{4})', str(item.get('symbol', ''))):
             continue
         title = item.get('title', '')
-        checks = [('停牌', '停牌' in title and '复牌' not in title),
-                  ('立案调查', bool(re.search(r'(?:公司被中国证监会立案|收到.{0,12}立案告知书|因涉嫌.{0,16}被.{0,8}立案)', title))),
-                  ('实施风险警示', bool(re.search(r'(?:实施|被实施)(?:退市|其他)风险警示', title)) and not re.search(r'撤销|解除|申请撤', title)),
+        checks = [('停牌', bool(re.search(r'停牌|(?:延期|暂缓|无法|不予|未能|不能|未获).{0,5}复牌', title)) and not re.search(r'(?:不|无需)停牌', title)),
+                  ('立案调查', bool(re.search(r'(?:立案调查|立案告知书|被.{0,24}立案)', title))),
+                  ('实施风险警示', bool(re.search(r'(?:实施|被实施)(?:退市|其他)风险警示', title))),
+                  ('风险警示待撤销', bool(re.search(r'(?:申请|拟申请)(?:撤销|解除)(?:退市|其他)风险警示', title))),
                   ('终止上市', '终止上市' in title and not re.search(r'撤销|不予|申请撤', title)),
                   ('进入退市整理期', '进入退市整理期' in title),
                   ('债务逾期', bool(re.search(r'债务逾期|无法按期偿还', title)) and not re.search(r'解除|已偿还|全部偿还', title))]
@@ -313,22 +356,30 @@ def risk_exclusions(items):
     return risks
 
 
-def collect(now=None):
+def collect(now=None, *, coverage_start=None):
     """Return a daily_plan-compatible morning_news document, without writing KV."""
     moment = _moment(now)
+    start = _coverage_start(moment, coverage_start).isoformat()
     record = {'date': moment.date().isoformat(), 'as_of': moment.isoformat(),
+              'collection_started_at': moment.isoformat(),
+              'window_start': start, 'window_end': moment.date().isoformat(),
               'timezone': 'Asia/Shanghai', 'status': 'unavailable', 'items': [],
               'risk_exclusions': [], 'errors': [], 'sources': [],
               'verification_scope': '来源与发布时间解析核验，不代表已独立核实全部报道事实或已阅读全部公告正文。',
-              'lookback_days': LOOKBACK_DAYS}
+              'lookback_days': (moment.date() - dt.date.fromisoformat(start)).days}
     if not _window(moment):
         record['errors'].append('采集时刻不在北京时间08:00至09:30盘前窗口内。')
         return record
     all_items = []
     for name, url, fetch in [('上海证券交易所·上市公司公告', SSE_PAGE, _sse), ('央视网财经', CCTV_PAGE, _cctv)]:
         try:
-            items, source = fetch(moment)
-            all_items.extend(items)
+            items, source = fetch(moment, start)
+            observed = _moment() if now is None else moment
+            if not isinstance(source, dict) or source.get('status') != 'complete':
+                raise NewsError('source collection did not produce a complete receipt')
+            source = dict(source, source=name, url=url, window_start=start,
+                          window_end=moment.date().isoformat(), observed_at=observed.isoformat())
+            all_items.extend(dict(item, source_url=url, observed_at=observed.isoformat()) for item in items)
             record['sources'].append(source)
         except NewsError as exc:
             record['errors'].append(name + '：' + str(exc))

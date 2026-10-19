@@ -6,11 +6,16 @@ GitHub Actions 使用 UTC cron，在北京时间每周一至周五08:00采集、
 
 仅研究公开行情、财报和资讯，用户手动交易；无富途登录、账户、真实持仓或交易接口。D1买入、D2卖出参考逐笔管理，不是T+0。
 
+v2.2使用三段时间验证、双基准、非重叠方向及每回合0.30个百分点的研究成本压力筛选。固定历史回放未证明模型优于零收益基准，不能声称准确率已经提高；没有证据时不强行推荐。方法、结果和数据限制见 [ACCURACY_AUDIT.md](ACCURACY_AUDIT.md)。新日报只在真实盘前窗口记录事前预测，等D2完成后才在“历史报告→事前预测跟踪”统计结果，不回填旧成绩。
+
+源码升级时 `model_refresh` 在原公开缓存上按原报告日期截断重算并原子保存；失败清空旧预测资格及数字，不改历史日报，也不将重算当晨间采集。远端既有分片seed作为初始化基线保留，本次源码更新不替换大体积行情种子；首次恢复也会按新协议重算。
+
 ## 目录与接口
 
 - `engine/`：现有 `ashare-platform` 的标准库研究模块，至少包含 `core.py`、`market_data.py`、`strategy.py`、`forecast.py`、`longterm.py`、`research_refresh.py`、`daily_plan.py`，由发布准备过程复制，不带本机data或账户记录。
 - `runner.py`：定时 `collect`、`publish` 与手动 `fundamentals` 阶段，均使用真实北京时间；不提供伪造历史运行时刻的命令参数。
-- `news_collector.py`：`collect(now) -> morning_news`，包括 `date/status/as_of/items/risk_exclusions`，新闻至少有标题、HTTPS原始来源和真实发布时间。缺采集器、缺来源或核验失败标为unavailable。
+- `news_collector.py`：`collect(now=None, coverage_start=...) -> morning_news`，覆盖至少4天且包含官方最近完整交易日，最多31天；保留公告/央视财经来源收据、发布时间及实际观察时间。并非全媒体、全部消息或公告正文逐份核验。
+- `session_risks.py`：在原08/09任务内核验当日上交所停复牌完整分页，明确股票代码才加入否决，转债不映射股票；失败、分页异常或空列表未经核准即暂停新推荐。来源覆盖完整不等于证明股票可成交，标题规则也不能替代人工阅读公告。
 - `export_static.py`：`export_site(output_dir, service, engine_dir=Path) -> metadata`，只导出公开研究JSON、静态网页及必要资源；页面没有Python服务端，也不执行采集。
 - `seed/research.json.gz`：本机及完整迁移包保留的公开研究初始化文件；完整gzip不提交仓库。
 - `seed/research.json.gz.parts.json` 和 `seed/research.part000.bin` 等：GitHub首次运行使用的相同gzip字节流，按4 MiB无损分片，末片可较小。清单记录顺序、大小及每片和完整gzip的SHA-256；必须同时保留清单与全部分片。恢复时优先读取本机完整gzip；缺少完整文件时，先逐片校验及重组，全部通过后再按相同研究白名单加载。缺片、改动、非法路径或重复顺序都会中止，不静默跳过。

@@ -49,18 +49,133 @@ def quote_gate(result, quote, target):
     cap, price = (quote or {}).get('market_cap_100m'), (quote or {}).get('price')
     valid = bool(quote and quote.get('symbol') == result.get('symbol') and quote.get('date') == target and
         type(cap) in (int, float) and math.isfinite(cap) and cap > 0 and type(price) in (int, float) and
-        math.isfinite(price) and price > 0 and quote.get('suspended') is not True)
+        math.isfinite(price) and price > 0 and quote.get('suspended') is False)
+    quote_name = str((quote or {}).get('name', ''))
+    issuer_restricted = bool((quote or {}).get('is_st') is True or (quote or {}).get('is_delisting') is True or
+        'ST' in quote_name.upper() or '退' in quote_name)
+    close = result.get('raw_close')
+    comparable = type(close) in (int, float) and math.isfinite(close) and close > 0
+    discrepancy = bool(valid and comparable and abs(price - close) > max(0.02, close * 0.001))
+    valid = valid and comparable and not issuer_restricted and not discrepancy
     result['quote_valid'] = valid
-    result['quote_snapshot'] = {k: quote.get(k) for k in ('symbol','date','price','market_cap_100m','suspended')} if quote else None
+    result['quote_snapshot'] = {k: quote.get(k) for k in ('symbol','name','date','datetime','price','market_cap_100m','suspended','is_st','is_delisting','source')} if quote else None
     why = exclusion(result.get('symbol',''), result.get('name',''), quote)
     if not valid:
         result['eligible'] = False
+        result['levels_status'] = 'research_only'
         result['warnings'] = ['报价或总市值未核验，无法确认超大盘排除，暂停推荐。'] + list(result.get('warnings',[]))
+        if issuer_restricted:
+            result['warnings'].append('最新报价标记ST或退市风险，与旧证券名称无关，暂停推荐。')
+        if discrepancy:
+            result['warnings'].append('同日未复权日线收盘与报价偏差超过两分钱与0.1%中的较大容差，需核对数据来源，暂停推荐。')
     if why:
         result.update(eligible=False, excluded=True, exclusion_reason=why)
         for key in ('entry_low','entry_high','stop_loss','take_profit','research_levels'):
             result[key] = None
     return result
+
+
+def prediction_failures(prediction, target):
+    """A saved eligibility flag cannot authorize a new recommendation by itself."""
+    p = prediction if isinstance(prediction, dict) else {}
+    failures = []
+    if p.get('model_version') != getattr(forecast, 'MODEL_VERSION', None) or p.get('validation_protocol') != getattr(forecast, 'VALIDATION_PROTOCOL', None) or p.get('validation_protocol_complete') is not True:
+        failures.append('模型缓存版本或分段验证证据不完整，等待当前协议重新计算')
+    if p.get('available') is not True or p.get('eligible') is not True:
+        failures.append('模型未通过推荐验证')
+    if p.get('as_of_date') != target or p.get('horizon_days') != 2 or p.get('target_kind') != 'next_open_to_following_close':
+        failures.append('预测日期或D1开盘至D2收盘口径不匹配')
+    if p.get('session_alignment') != 'benchmark_sessions' or p.get('latest_feature_window_aligned') is not True:
+        failures.append('预测缺少连续基准交易日对齐证明')
+    def number(value, positive=False):
+        return type(value) in (int, float) and math.isfinite(value) and (value > 0 if positive else value >= 0)
+    def day(value):
+        try:
+            return dt.date.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+    def beats(metrics):
+        metrics = metrics if isinstance(metrics, dict) else {}
+        values = [metrics.get(key) for key in ('mae_pct', 'baseline_mae_pct', 'zero_baseline_mae_pct')]
+        return all(number(value) for value in values) and values[0] < min(values[1:])
+    folds = p.get('validation_folds')
+    evidence_ok = isinstance(folds, list) and len(folds) == forecast.VALIDATION_FOLDS
+    prior_end = None
+    if evidence_ok:
+        for fold in folds:
+            if not isinstance(fold, dict):
+                evidence_ok = False
+                break
+            training, first, last, label = [day(fold.get(key)) for key in ('training_label_end', 'feature_start', 'feature_end', 'label_end')]
+            if not (all((training, first, last, label, day(target))) and training < first <= last < label <= day(target) and
+                    (prior_end is None or prior_end < first) and fold.get('samples') == forecast.HOLDOUT and
+                    type(fold.get('training_samples')) is int and fold['training_samples'] >= forecast.MIN_TRAIN and
+                    type(fold.get('embargo_samples')) is int and fold['embargo_samples'] >= forecast.EMBARGO):
+                evidence_ok = False
+                break
+            prior_end = last
+    aggregate = p.get('validation_aggregate') or {}
+    nonoverlap = p.get('validation_nonoverlapping') or {}
+    if evidence_ok:
+        newest = folds[-1]
+        evidence_ok = (type(aggregate) is dict and aggregate.get('samples') == forecast.HOLDOUT * forecast.VALIDATION_FOLDS and
+            beats(aggregate) and beats(newest) and sum(beats(fold) for fold in folds) >= 2 and
+            newest.get('label_end') == target and p.get('validation_label_end') == newest.get('label_end') and
+            p.get('validation_feature_start') == newest.get('feature_start') and p.get('validation_feature_end') == newest.get('feature_end') and
+            number(newest.get('direction_accuracy_pct')) and number(newest.get('baseline_direction_accuracy_pct')) and
+            52 <= newest['direction_accuracy_pct'] <= 100 and newest['direction_accuracy_pct'] >= newest['baseline_direction_accuracy_pct'] and
+            type(nonoverlap) is dict and type(nonoverlap.get('samples')) is int and 90 <= nonoverlap['samples'] <= 180 and
+            number(nonoverlap.get('direction_accuracy_pct')) and number(nonoverlap.get('baseline_direction_accuracy_pct')) and
+            52 <= nonoverlap['direction_accuracy_pct'] <= 100 and nonoverlap['direction_accuracy_pct'] >= nonoverlap['baseline_direction_accuracy_pct'])
+    if not evidence_ok:
+        failures.append('三段验证的日期、样本数或双基准证据不完整，不能仅凭合格标记推荐')
+    for key in ('expected_return_pct', 'rank_value', 'cost_stress_return_pct'):
+        value = p.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            failures.append('预测、成本压力或排名值无效')
+            break
+    expected, stressed, cost = (p.get(key) for key in ('expected_return_pct', 'cost_stress_return_pct', 'round_trip_cost_stress_pct'))
+    if not (number(expected, True) and number(stressed, True) and number(cost, True) and
+            cost == forecast.ROUND_TRIP_COST_STRESS_PCT and abs(expected - stressed - cost) <= .002):
+        failures.append('成本压力假设或扣减数值不一致')
+    return failures
+
+
+def prediction_gate(result, target):
+    result = dict(result)
+    if result.get('symbol') == 'sh000001':
+        return result
+    failures = prediction_failures(result.get('prediction'), target)
+    result['prediction_current'] = not failures
+    if failures:
+        result['eligible'] = False
+        result['levels_status'] = 'research_only'
+        result['max_position_pct'] = 0
+        result['warnings'] = list(dict.fromkeys(list(result.get('warnings', [])) + failures))
+        if isinstance(result.get('prediction'), dict):
+            result['prediction'] = dict(result['prediction'], eligible=False, rank_value=None)
+    return result
+
+
+def model_quality(stocks, data_date):
+    """Describe stored out-of-time evidence; never label it a live win rate."""
+    predictions = [s.get('prediction') for s in stocks if isinstance(s.get('prediction'), dict)]
+    current = [p for p in predictions if p.get('model_version') == forecast.MODEL_VERSION]
+    complete = [p for p in current if p.get('validation_protocol_complete') is True]
+    def average(key, section=None):
+        values = [(p.get(section) or {}).get(key) if section else p.get(key) for p in complete]
+        values = [x for x in values if type(x) in (int, float) and math.isfinite(x)]
+        return round(sum(values) / len(values), 3) if values else None
+    return {'model_version': forecast.MODEL_VERSION, 'validation_protocol': forecast.VALIDATION_PROTOCOL,
+        'data_date': data_date, 'universe': len(stocks),
+        'available': sum(p.get('available') is True for p in current),
+        'protocol_complete': len(complete),
+        'model_qualified': sum(not prediction_failures(p, data_date) for p in complete),
+        'recommendation_qualified': sum(s.get('eligible') is True and not prediction_failures(s.get('prediction'), data_date) for s in stocks),
+        'mean_stock_oos_mae_pct': average('mae_pct', 'validation_aggregate'),
+        'mean_stock_median_baseline_mae_pct': average('baseline_mae_pct', 'validation_aggregate'),
+        'mean_stock_zero_baseline_mae_pct': average('zero_baseline_mae_pct', 'validation_aggregate'),
+        'note': '逐股分段时间验证的平均误差；股票和时期相关，不是独立样本，更不是荐股实盘胜率。缺乏优势时不强行推荐。'}
 
 
 def enrich_signal(result, bars, benchmark=None, quote=None):
@@ -249,7 +364,7 @@ class Service:
             target = expected_date()
             cfg = config()
             previous = getkv('last_success', {})
-            if not force and previous.get('target_date') == target and previous.get('universe') == cfg['universe'] and previous.get('watchlist') == cfg['watchlist']:
+            if not force and previous.get('target_date') == target and previous.get('universe') == cfg['universe'] and previous.get('watchlist') == cfg['watchlist'] and previous.get('model_version') == getattr(forecast, 'MODEL_VERSION', None):
                 self.status = {'status': 'idle', 'phase': '最近完整交易日已经更新'}
                 return self.status
             with connect() as con:
@@ -338,9 +453,9 @@ class Service:
             with connect() as con:
                 con.execute('UPDATE runs SET ended_at=?,status=?,error=? WHERE id=?', (end, status, error, run_id))
             # A partial refresh with suspended stocks is still retained as a completed report.
-            putkv('last_completed', {'target_date': target, 'finished_at': end, 'ok': ok, 'failed': failed, 'total': len(stocks), 'status': status})
+            putkv('last_completed', {'target_date': target, 'finished_at': end, 'ok': ok, 'failed': failed, 'total': len(stocks), 'status': status, 'model_version': getattr(forecast, 'MODEL_VERSION', None)})
             if status == 'success':
-                putkv('last_success', {'target_date': target, 'finished_at': end, 'universe': cfg['universe'], 'watchlist': cfg['watchlist']})
+                putkv('last_success', {'target_date': target, 'finished_at': end, 'universe': cfg['universe'], 'watchlist': cfg['watchlist'], 'model_version': getattr(forecast, 'MODEL_VERSION', None)})
             self.status = {'status': status, 'completed': ok+failed, 'total': len(stocks), 'ok': ok, 'failed': failed}
             try:
                 from research_refresh import refresh_fundamentals
@@ -388,7 +503,7 @@ class Service:
                 index = item
                 index['bars'] = [b for b in load_history('sh000001').get('bars', []) if b['date'] <= (report_date or '')][-180:]
             else:
-                item = quote_gate(item, quotes.get(item['symbol']), target)
+                item = prediction_gate(quote_gate(item, quotes.get(item['symbol']), target), target)
                 stocks.append(item)
                 fresh += not item.get('stale', True)
         if not index or index.get('stale'):
@@ -422,6 +537,7 @@ class Service:
                 'schedule_status': getkv('schedule_status'), 'progress': progress}
         meta['agent_status'] = {'verified': False, 'execution_verified': False, 'mode': 'manual_research', 'status': 'manual', 'message': '仅生成研究与买卖参考，由本人操作；已停用券商接入。'}
         meta['exclusion_policy'] = '金融、石油石化、指定大型指数权重股及已知总市值5000亿元以上股票仅列参考'
+        meta['model_quality'] = model_quality(stocks, index_date)
         official = getkv('daily_plan:'+now().date().isoformat(), {})
         meta.update(daily_buy=official.get('buy'),daily_plan_status=official.get('status','pending'),
             daily_plan_message=official.get('message','当日09:00日报尚未发布；休市日不生成交易计划。当前表格为收盘研究。'))
@@ -460,7 +576,7 @@ class Service:
         result.update(excluded=bool(why), exclusion_reason=why)
         if why:
             result['eligible'] = False
-        result = quote_gate(result, valuation, target)
+        result = prediction_gate(quote_gate(result, valuation, target), target)
         try:
             backtest = strategy.backtest_cycle(history['bars'], symbol, name=result.get('name', ''), excluded=bool(why))
             backtest_error = None

@@ -129,6 +129,23 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(runner.run_stage('collect',core,service)['status'],'late_skipped')
             news.assert_not_called();service.refresh.assert_not_called()
 
+    def test_publish_rechecks_current_news_before_selection_but_late_recovery_does_not(self):
+        for hour,minute,recheck in ((9,0,True),(9,29,True),(9,30,False),(16,0,False)):
+            core=FakeCore(dt.datetime(2026,10,19,hour,minute,tzinfo=runner.TZ));order=[]
+            publish=Mock(side_effect=lambda:order.append('publish') or {'status':'published'})
+            with patch.object(runner,'collect_news',side_effect=lambda core:order.append('news')) as news,patch.object(runner.importlib,'import_module',return_value=types.SimpleNamespace(publish=publish)):
+                runner.run_stage('publish',core,Mock())
+            self.assertEqual(order,['news','publish'] if recheck else ['publish'])
+            self.assertEqual(news.call_count,int(recheck))
+
+    def test_news_window_receives_the_official_completed_session(self):
+        core=FakeCore();collect=Mock(return_value={'status':'verified','as_of':'2026-10-19T08:30:00+08:00'})
+        risk=types.SimpleNamespace(collect=Mock(return_value={'status':'complete','risk_exclusions':[]}))
+        with patch.object(runner.importlib,'import_module',side_effect=lambda name:types.SimpleNamespace(collect=collect) if name=='news_collector' else risk):
+            result=runner.collect_news(core)
+        collect.assert_called_once_with(coverage_start='2026-10-16')
+        self.assertEqual(core.getkv('morning_news'),result)
+
     def test_same_day_complete_financial_snapshot_reuses_reports_and_never_republishes_plan(self):
         core=FakeCore();core.putkv('longterm',{'as_of':'2026-10-16','coverage':{'valuation_qualified':836,'financial_complete':836,'not_researched':0}})
         with patch.object(runner,'fast_valuations',return_value={'received':2320}) as valuations,patch.object(runner.importlib,'import_module') as imports:

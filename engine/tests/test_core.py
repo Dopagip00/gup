@@ -64,6 +64,29 @@ class PlatformTests(unittest.TestCase):
         result = core.gate_signal({'date': '2026-10-16', 'eligible': True}, '2026-10-16', False)
         self.assertFalse(result['eligible'])
 
+    def test_fresh_quote_risk_flags_and_price_disagreement_override_old_security_name(self):
+        stock=self.candidate()
+        quote={'symbol':stock['symbol'],'date':stock['date'],'price':10,'market_cap_100m':300,'suspended':False}
+        for changes in ({'is_st':True},{'is_delisting':True},{'name':'*ST测试'},{'name':'测试退'},{'price':10.5}):
+            with self.subTest(changes=changes):
+                result=core.quote_gate(stock,dict(quote,**changes),stock['date'])
+                self.assertFalse(result['eligible']);self.assertFalse(result['quote_valid'])
+                self.assertEqual(result['levels_status'],'research_only')
+        self.assertTrue(core.quote_gate(stock,dict(quote,price=10.01),stock['date'])['eligible'])
+
+    def test_missing_unadjusted_close_cannot_confirm_quote_consistency(self):
+        stock=self.candidate();stock.pop('raw_close',None)
+        quote={'symbol':stock['symbol'],'date':stock['date'],'price':10,'market_cap_100m':300,'suspended':False}
+        result=core.quote_gate(stock,quote,stock['date'])
+        self.assertFalse(result['eligible']);self.assertFalse(result['quote_valid'])
+
+    def test_old_prediction_cache_cannot_authorize_new_recommendation(self):
+        stock=self.candidate(); original=dict(stock['prediction'])
+        result=core.prediction_gate(stock,stock['date'])
+        self.assertFalse(result['eligible']);self.assertFalse(result['prediction']['eligible'])
+        self.assertIsNone(result['prediction']['rank_value']);self.assertEqual(stock['prediction'],original)
+        self.assertEqual(result['levels_status'],'research_only')
+
     def test_calendar_failure_is_closed(self):
         with patch.object(core.md, 'is_trading_day', side_effect=RuntimeError('missing calendar')):
             self.assertFalse(core.is_open(dt.datetime(2027, 1, 4, 10, 0, tzinfo=core.TZ)))
@@ -76,7 +99,7 @@ class PlatformTests(unittest.TestCase):
 
     def test_missing_or_wrong_day_market_cap_cannot_pass_preference_filter(self):
         stock=self.candidate()
-        quote={'symbol':stock['symbol'],'date':stock['date'],'price':10,'market_cap_100m':300}
+        quote={'symbol':stock['symbol'],'date':stock['date'],'price':10,'market_cap_100m':300,'suspended':False}
         self.assertTrue(core.quote_gate(stock,quote,stock['date'])['eligible'])
         for bad in (None,dict(quote,date='2026-10-14'),dict(quote,market_cap_100m=None),dict(quote,suspended=True)):
             self.assertFalse(core.quote_gate(stock,bad,stock['date'])['eligible'])

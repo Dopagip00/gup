@@ -92,7 +92,7 @@
       const [data,cal]=await Promise.all([read('data/longterm.json'),read('data/calendar.json')]);
       if(!context(cal).target||data.as_of!==context(cal).target){data.warnings=[...(data.warnings||[]),'长线快照未覆盖最近完整交易日。'];(data.stocks||[]).forEach(x=>{x.eligible=false;x.stale=true;});}return data;
     }
-    if(!['config','system','reports','quotes'].includes(name))throw new Error('不支持的静态接口');
+    if(!['config','system','reports','quotes','forecast-audit'].includes(name))throw new Error('不支持的静态接口');
     return read(`data/${name}.json`);
   }
   const apiObject={api,download:date=>/^\d{4}-\d{2}-\d{2}$/.test(date||'')?`./data/csv/${date}.csv`:'#',context,gatePlan,gateDashboard};

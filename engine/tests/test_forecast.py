@@ -252,6 +252,128 @@ class ForecastTests(unittest.TestCase):
             row['close'] = float('nan')
         self.assertEqual(initial, forecast.predict(history, benchmark))
 
+    def test_protocol_version_exists_even_when_unavailable_or_insufficient_folds(self):
+        for history in ([], bars(246), bars(365)):
+            result = forecast.predict(history)
+            for value in (result, result['next_day']):
+                self.assertEqual(value['model_version'], 'ridge-cycle-v2')
+                self.assertEqual(value['validation_protocol'], 'purged-expanding-3x60-v1')
+            self.assertFalse(result['validation_protocol_complete'])
+            self.assertFalse(result['eligible'])
+        boundary = forecast.predict(bars(366))
+        self.assertTrue(boundary['available'])
+        self.assertTrue(boundary['validation_protocol_complete'])
+        self.assertEqual(boundary['validation_folds'][0]['training_samples'], 120)
+
+    def test_three_folds_are_disjoint_expanding_and_purged_with_matured_dates(self):
+        result = forecast.predict(bars(500))
+        for value in (result, result['next_day']):
+            folds = value['validation_folds']
+            self.assertEqual(len(folds), 3)
+            self.assertEqual(value['validation_aggregate']['samples'], 180)
+            previous = None
+            for fold in folds:
+                self.assertEqual(fold['samples'], 60)
+                self.assertEqual(fold['embargo_samples'], 5)
+                self.assertLess(fold['training_label_end'], fold['feature_start'])
+                self.assertLessEqual(fold['label_end'], value['as_of_date'])
+                self.assertGreaterEqual(fold['training_samples'], 120)
+                if previous:
+                    self.assertLess(previous['feature_end'], fold['feature_start'])
+                    self.assertGreater(fold['training_samples'], previous['training_samples'])
+                previous = fold
+
+    def test_each_fold_fit_is_invariant_to_its_validation_and_future_prices(self):
+        history = bars(500)
+        # Model fit order is latest, current, middle, oldest. Current fit may
+        # consume all matured outcomes; the three OOS fits must not do so.
+        original_fit = forecast._fit
+        def fits_for(rows):
+            captured = []
+            def capture(samples):
+                captured.append(copy.deepcopy(samples))
+                return original_fit(samples)
+            with patch.object(forecast, '_fit', side_effect=capture):
+                prediction = forecast.predict(rows)
+            return prediction, captured
+        original, captures = fits_for(history)
+        for fold, fit_position in zip(original['validation_folds'], (3, 2, 0)):
+            altered = copy.deepcopy(history)
+            for row in altered:
+                if row['date'] >= fold['feature_start']:
+                    row['close'] *= 1.15
+                    row['open'] *= 1.05
+            _, changed_captures = fits_for(altered)
+            self.assertEqual(captures[fit_position], changed_captures[fit_position])
+
+    def test_nonoverlap_diagnostic_uses_disjoint_holding_sessions(self):
+        observations = [{'index': i} for i in range(20)]
+        selected = forecast._nonoverlapping(observations, 2)
+        self.assertEqual([item['index'] for item in selected], list(range(0, 20, 2)))
+        for left, right in zip(selected, selected[1:]):
+            self.assertGreater(right['index'] + 1, left['index'] + 2)
+        # Consecutive close-to-close intervals share no daily return increment.
+        self.assertEqual(forecast._nonoverlapping(observations, 1), observations)
+        result = forecast.predict(bars(500))
+        self.assertEqual(result['validation_nonoverlapping']['samples'], 90)
+        self.assertEqual(result['next_day']['validation_nonoverlapping']['samples'], 180)
+
+    def test_interval_coverage_uses_only_already_mature_earlier_fold_residuals(self):
+        result = forecast.predict(bars(500))
+        for value in (result, result['next_day']):
+            coverage = value['interval_validation']
+            self.assertEqual(coverage['calibration_samples'], 120 - value['horizon_days'])
+            self.assertLess(coverage['calibration_label_end'], coverage['evaluation_feature_start'])
+            self.assertEqual(coverage['evaluation_samples'], 60)
+            self.assertTrue(0 <= coverage['empirical_coverage_pct'] <= 100)
+            self.assertEqual(coverage['evaluation_label_end'], value['as_of_date'])
+
+    def test_good_latest_fold_alone_cannot_pass_bad_earlier_regimes(self):
+        history = bars(500)
+        for i, row in enumerate(history):
+            row.update(open=1.0, close=1.01 if i % 2 else 0.99, volume=10000)
+        rows = forecast._prepare(history, require_open=True)
+        samples = len(rows) - forecast.FEATURE_START - 2
+        latest_train_count = samples - forecast.HOLDOUT - forecast.EMBARGO
+        features = {i: [i] for i in range(forecast.FEATURE_START, len(rows))}
+        def fit(items):
+            return {'count': len(items), 'center': [250.0], 'scale': [1000.0]}
+        def estimate(model, values):
+            i = values[0]
+            if model['count'] == samples:
+                return 3.0
+            actual = (rows[i + 2]['close'] - 1) * 100
+            return actual if model['count'] == latest_train_count else -actual
+        with patch.object(forecast, '_fit', side_effect=fit), patch.object(forecast, '_estimate', side_effect=estimate):
+            result = forecast._horizon(rows, features, False, 2)
+        self.assertTrue(result['validation_folds'][-1]['beats_both_baselines'])
+        self.assertEqual(sum(f['beats_both_baselines'] for f in result['validation_folds']), 1)
+        self.assertGreater(result['raw_rank_value'], 0)
+        self.assertFalse(result['eligible'])
+        self.assertIn('稳定性检查未通过', result['reason'])
+        self.assertIn('合并时间验证误差', result['reason'])
+
+    def test_cost_stress_is_explicit_and_subtracted_from_rank_without_relabeling_target(self):
+        result = forecast.predict(bars(500))
+        for value in (result, result['next_day']):
+            self.assertEqual(value['round_trip_cost_stress_pct'], 0.30)
+            self.assertAlmostEqual(value['cost_stress_return_pct'], value['expected_return_pct'] - 0.30, places=3)
+            self.assertAlmostEqual(value['raw_rank_value'], value['gross_raw_rank_value'] - 0.30, places=3)
+            self.assertIn('不是实际佣金税费', value['cost_stress_method'])
+        self.assertEqual(result['target_kind'], 'next_open_to_following_close')
+
+    def test_gap_in_current_feature_window_prevents_recommendation(self):
+        benchmark = bars(500)
+        history = copy.deepcopy(benchmark[:480] + benchmark[481:])
+        result = forecast.predict(history, benchmark)
+        self.assertTrue(result['available'])
+        self.assertTrue(result['validation_protocol_complete'])
+        self.assertFalse(result['latest_feature_window_aligned'])
+        self.assertFalse(result['eligible'])
+        self.assertIn('最近60根特征日线未连续对齐', result['reason'])
+        old_gap = copy.deepcopy(benchmark[:150] + benchmark[151:])
+        self.assertTrue(forecast.predict(old_gap, benchmark)['latest_feature_window_aligned'])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -67,6 +67,9 @@ def make_handler(service, port):
                     return self.send(service.portfolio())
                 if url.path == '/api/reports':
                     return self.send(service.reports())
+                if url.path == '/api/forecast-audit':
+                    import forecast_audit
+                    return self.send(forecast_audit.evaluate(core))
                 if url.path == '/api/longterm':
                     return self.send(service.longterm())
                 if url.path == '/api/agent':

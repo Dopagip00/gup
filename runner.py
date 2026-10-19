@@ -19,7 +19,7 @@ TZ = dt.timezone(dt.timedelta(hours=8))
 ROOT = Path(__file__).resolve().parent
 PUBLIC_TABLES = ('securities', 'histories', 'signals', 'runs')
 PUBLIC_KEYS = {'universe_info', 'last_success', 'last_completed', 'valuation_quotes', 'longterm',
-               'morning_news', 'quotes', 'github_collect', 'github_publish', 'github_fundamentals', 'github_run_status'}
+               'morning_news', 'quotes', 'github_collect', 'github_publish', 'github_fundamentals', 'github_run_status', 'model_recalculation'}
 PUBLIC_SCHEMA = {
     'securities': ('symbol', 'name', 'active'),
     'histories': ('symbol', 'payload', 'updated_at'),
@@ -47,7 +47,7 @@ def public_key(key):
 def clean_value(key, value):
     # Research timestamps survive; local watchlists, positions and settings do not.
     if key in ('last_success', 'last_completed') and isinstance(value, dict):
-        return {k: value[k] for k in ('target_date', 'finished_at', 'status', 'ok', 'failed', 'total', 'universe') if k in value}
+        return {k: value[k] for k in ('target_date', 'finished_at', 'status', 'ok', 'failed', 'total', 'universe', 'model_version') if k in value}
     return value
 
 
@@ -284,12 +284,33 @@ def save_plans(core, repository_file: Path, artifact_dir: Path):
 def collect_news(core):
     moment = core.now()
     try:
-        result = importlib.import_module('news_collector').collect()
+        target = core.md.last_completed_session(moment.replace(hour=9, minute=0, second=0, microsecond=0))
+        result = importlib.import_module('news_collector').collect(coverage_start=target)
         if not isinstance(result, dict):
             raise ValueError('新闻采集器返回格式错误')
     except Exception as exc:
         result = {'date': moment.date().isoformat(), 'status': 'unavailable', 'as_of': moment.isoformat(), 'items': [],
                   'risk_exclusions': [], 'errors': ['新闻采集失败：' + type(exc).__name__]}
+    try:
+        if not core.md.is_trading_day(moment.date().isoformat()):
+            raise ValueError('目标不是已核准交易日')
+        session_risks = importlib.import_module('session_risks').collect(moment.date().isoformat())
+        if not isinstance(session_risks, dict):
+            raise ValueError('停复牌采集器返回格式错误')
+    except Exception as exc:
+        session_risks = {'status':'unavailable','session_date':moment.date().isoformat(),
+            'risk_exclusions':[],'errors':[type(exc).__name__]}
+    result = dict(result)
+    result['session_risks'] = session_risks
+    result['risk_exclusions'] = list(result.get('risk_exclusions') or []) + list(session_risks.get('risk_exclusions') or [])
+    if session_risks.get('status') != 'complete':
+        result['status'] = 'unavailable'
+        result['errors'] = list(result.get('errors') or []) + ['当日上交所停复牌列表未取得完整记录，暂停新推荐。']
+    finished = core.now()
+    result['as_of'] = finished.isoformat()
+    if finished.date() != moment.date() or not dt.time(8) <= finished.time().replace(tzinfo=None) < dt.time(9,30):
+        result['status'] = 'unavailable'
+        result['errors'] = list(result.get('errors') or []) + ['全部资讯核验完成已超出盘前窗口，暂停新推荐。']
     core.putkv('morning_news', result)
     return result
 
@@ -360,6 +381,10 @@ def run_stage(stage, core, service):
     elif stage == 'publish':
         if moment.time().replace(tzinfo=None) < dt.time(9):
             return dict(result, status='skipped', reason='尚未到北京时间09:00，禁止提前发布')
+        if moment.time().replace(tzinfo=None) < dt.time(9, 30):
+            # Same authorized 09:00 job: recheck newly published notices before
+            # selection, retaining the actual new completion time and receipts.
+            collect_news(core)
         plan = importlib.import_module('daily_plan').publish()
         result.update(status=plan.get('status'), finished_at=core.now().isoformat(), published_at=plan.get('published_at'),
                       morning_ready=plan.get('morning_ready', False), late=plan.get('late', False),
@@ -416,6 +441,11 @@ def main(argv=None):
     service = core.Service()
     failure = False
     try:
+        if args.stage != 'collect':
+            recalculation = importlib.import_module('model_refresh').refresh_cached_predictions(core)
+            core.putkv('model_recalculation', recalculation)
+            if recalculation.get('status') in ('error', 'conflict'):
+                raise RuntimeError('模型重算失败或源数据已变化，暂停本次研究发布')
         result = run_stage(args.stage, core, service)
     except Exception as exc:
         result = {'date': core.now().date().isoformat(), 'stage': args.stage, 'status': 'error', 'finished_at': core.now().isoformat(),
