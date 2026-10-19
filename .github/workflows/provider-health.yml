@@ -1,0 +1,41 @@
+name: Public market feed diagnostic
+
+on:
+  push:
+    paths: ['.github/workflows/provider-health.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-feeds:
+    if: github.repository == 'Dopagip00/gup' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.ENABLE_SCHEDULED_RESEARCH != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Read public official list and completed index without writing research state
+        run: |
+          python -u - <<'PY'
+          import concurrent.futures, json, sys
+          sys.path.insert(0, 'engine')
+          import market_data as md
+          def probe(kind):
+              print(json.dumps({'probe': kind, 'started_at': md._now().isoformat()}), flush=True)
+              try:
+                  if kind == 'official_universe':
+                      rows = md.get_universe('shanghai')
+                      result = {'count': len(rows), 'unique': len({r['symbol'] for r in rows}), 'source_api': rows[0].get('source_api')}
+                  else:
+                      value = md.fetch_history('sh000001', count=10)
+                      result = {key: value.get(key) for key in ('latest_date', 'expected_date', 'stale', 'source')}
+                  print(json.dumps({'probe': kind, 'ok': True, **result}, ensure_ascii=False), flush=True)
+              except md.MarketDataError as exc:
+                  print(json.dumps({'probe': kind, 'ok': False, 'error': type(exc).__name__, 'detail': str(exc)[:600]}, ensure_ascii=False), flush=True)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+              list(pool.map(probe, ['official_universe', 'completed_index']))
+          PY
