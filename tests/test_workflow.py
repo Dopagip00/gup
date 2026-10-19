@@ -75,10 +75,14 @@ class WorkflowBranchTests(unittest.TestCase):
     def test_targets_and_bounded_pre_market_recovery_schedules(self):
         self.assertEqual(re.findall(r"(?m)^    - cron: '([^']+)'$",WORKFLOW),
             ['0 0 * * 1-5','17 0 * * 1-5','43 0 * * 1-5',
-             '0 1 * * 1-5','7 1 * * 1-5','17 1 * * 1-5'])
+             '0 1 * * 1-5','7 1 * * 1-5','17 1 * * 1-5',
+             '20 8 * * 1-5','10 9 * * 1-5'])
         # All fallback clocks remain before the engine's 09:30 new-buy cutoff.
         for minute,hour in re.findall(r"(?m)^    - cron: '(\d+) (\d+) \* \* 1-5'$",WORKFLOW):
             beijing_minutes=(int(hour)+8)*60+int(minute)
+            if int(hour)>=8:
+                self.assertIn(beijing_minutes,(16*60+20,17*60+10))
+                continue
             self.assertGreaterEqual(beijing_minutes,8*60)
             self.assertLess(beijing_minutes,9*60+30)
 
@@ -105,7 +109,7 @@ class WorkflowBranchTests(unittest.TestCase):
         configured=re.findall(r"(?m)^    - cron: '([^']+)'$",WORKFLOW)
         self.assertEqual(set(mapping),set(configured))
         self.assertEqual([schedule for schedule in configured if mapping[schedule]=='collect'],
-            ['0 0 * * 1-5','17 0 * * 1-5','43 0 * * 1-5'])
+            ['0 0 * * 1-5','17 0 * * 1-5','43 0 * * 1-5','20 8 * * 1-5','10 9 * * 1-5'])
         self.assertEqual([schedule for schedule in configured if mapping[schedule]=='publish'],
             ['0 1 * * 1-5','7 1 * * 1-5','17 1 * * 1-5'])
         self.assertIn("*) echo '::error::Unrecognized research schedule'; exit 1",resolver)

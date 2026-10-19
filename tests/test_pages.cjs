@@ -36,6 +36,8 @@ function browser(options={}){
   const fixtures={
     '/gup/data/manifest.json':manifest,'/gup/data/calendar.json':cal,
     '/gup/data/dashboard.json':{meta:{data_date:'2026-10-16'},stocks:[stock]},
+    '/gup/data/reports.json':[{date:'2026-10-16',count:1}],
+    '/gup/data/reports/2026-10-16.json':{meta:{data_date:'2026-10-16',report_date:'2026-10-16'},stocks:[stock]},
     '/gup/data/daily-plan.json':{date:'2026-10-19',status:'published',buy:stock,sell:[]},
     '/gup/data/stocks/sh601811.json':{stock},'/gup/data/longterm.json':{as_of:'2026-10-16',stocks:[stock]}
   };
@@ -48,6 +50,65 @@ function browser(options={}){
   return {api:sandbox.PagesResearch.api,calls,storage:localStorage,setFetch:fn=>{fetchImpl=fn;}};
 }
 const response=value=>({ok:true,status:200,json:async()=>structuredClone(value)});
+test('an ungenerated selected day shows the actual latest day without requesting a missing file or retaining buy prices',async()=>{
+  const b=browser(),data=await b.api('/api/dashboard?date=2026-10-19');
+  assert.equal(data.meta.snapshot_transport.mode,'live');assert.equal(data.meta.data_date,'2026-10-16');
+  assert.equal(data.meta.report_selection.status,'unavailable');assert.equal(data.meta.report_selection.requested_date,'2026-10-19');assert.equal(data.meta.report_selection.actual_date,'2026-10-16');
+  assert.match(data.meta.warnings.join(''),/2026-10-19.*尚未生成/);assert.equal(data.meta.daily_buy,null);
+  assert.equal(data.stocks[0].eligible,false);assert.equal(data.stocks[0].entry_low,undefined);
+  assert(!b.calls.some(url=>url.includes('/data/reports/2026-10-19.json')));
+  assert(Object.keys(b.storage).some(key=>key.endsWith('dashboard:latest')));assert(!Object.keys(b.storage).some(key=>key.endsWith('dashboard:2026-10-19')));
+});
+test('a missing-day selection can restore only the explicitly labelled real latest snapshot offline',async()=>{
+  const live=browser();await live.api('/api/dashboard?date=2026-10-19');
+  const b=browser({storage:live.storage,fetch:async()=>{throw Error('offline');}}),data=await b.api('/api/dashboard?date=2026-10-19');
+  assert.equal(data.meta.snapshot_transport.mode,'offline');assert.equal(data.meta.data_date,'2026-10-16');assert.equal(data.meta.report_selection.requested_date,'2026-10-19');assert.equal(data.stocks[0].eligible,false);
+});
+test('a listed report is fetched only for its real date and rejects a mismatched payload',async()=>{
+  const b=browser(),data=await b.api('/api/dashboard?date=2026-10-16');
+  assert.equal(data.meta.report_date,'2026-10-16');assert.equal(data.meta.report_selection,undefined);
+  const bad=browser({fetch:async(url,init,fixtures)=>response(url.pathname.includes('/reports/2026-10-16.json')?{meta:{data_date:'2026-10-16',report_date:'2026-10-19'},stocks:[]}:fixtures[url.pathname])});
+  await assert.rejects(bad.api('/api/dashboard?date=2026-10-16'),/历史报告日期无效/);
+});
+test('a report-list network error stays a real loading failure instead of being labelled a missing day',async()=>{
+  const b=browser({fetch:async(url,init,fixtures)=>url.pathname.endsWith('reports.json')?{ok:false,status:503}:response(fixtures[url.pathname])});
+  await assert.rejects(b.api('/api/dashboard?date=2026-10-19'),/503/);
+  assert(!b.calls.some(url=>url.includes('/data/dashboard.json')));
+});
+test('a newer deployment can open the selected day only after the same epoch publishes its report',async()=>{
+  const current={...manifest,generated_at:'2026-10-19T20:00:00+08:00',data_date:'2026-10-19'};
+  const b=browser({now:Date.parse('2026-10-19T21:00:00+08:00'),fetch:async(url,init,fixtures)=>{
+    if(url.pathname.endsWith('manifest.json'))return response(current);
+    if(url.pathname.endsWith('reports.json'))return response([{date:'2026-10-19',count:1},{date:'2026-10-16',count:1}]);
+    if(url.pathname.endsWith('/reports/2026-10-19.json'))return response({meta:{data_date:'2026-10-19',report_date:'2026-10-19'},stocks:[]});
+    return response(fixtures[url.pathname]);
+  }});
+  const data=await b.api('/api/dashboard?date=2026-10-19');assert.equal(data.meta.data_date,'2026-10-19');assert.equal(data.meta.report_date,'2026-10-19');assert.equal(data.meta.report_selection,undefined);
+  assert.equal(data.meta.snapshot_transport.generated_at,current.generated_at);
+});
+test('a lagging archive list cannot label an existing latest market day as ungenerated',async()=>{
+  const current={...manifest,generated_at:'2026-10-19T20:00:00+08:00',data_date:'2026-10-19'};
+  const b=browser({now:Date.parse('2026-10-19T21:00:00+08:00'),fetch:async(url,init,fixtures)=>{
+    if(url.pathname.endsWith('manifest.json'))return response(current);
+    if(url.pathname.endsWith('dashboard.json'))return response({meta:{data_date:'2026-10-19',report_date:'2026-10-19'},stocks:[]});
+    return response(fixtures[url.pathname]);
+  }});
+  const data=await b.api('/api/dashboard?date=2026-10-19');assert.equal(data.meta.data_date,'2026-10-19');assert.equal(data.meta.report_selection.status,'available');
+  assert.equal(data.meta.report_selection.source,'latest');assert.doesNotMatch(data.meta.warnings.join(''),/尚未生成/);assert.equal(data.meta.daily_buy,null);
+  assert(!b.calls.some(url=>url.includes('/data/reports/2026-10-19.json')));
+});
+test('archive discovery and report content stay in one deployment when the selected day is published mid-request',async()=>{
+  const current={...manifest,generated_at:'2026-10-19T20:00:00+08:00',data_date:'2026-10-19'};let reads=0;
+  const b=browser({now:Date.parse('2026-10-19T21:00:00+08:00'),fetch:async(url,init,fixtures)=>{
+    if(url.pathname.endsWith('manifest.json'))return response(++reads<=2?manifest:current);
+    const latest=url.searchParams.get('v')===current.generated_at;
+    if(url.pathname.endsWith('reports.json'))return response(latest?[{date:'2026-10-19',count:1}]:fixtures[url.pathname]);
+    if(url.pathname.endsWith('dashboard.json'))return response(latest?{meta:{data_date:'2026-10-19',report_date:'2026-10-19'},stocks:[]}:fixtures[url.pathname]);
+    if(url.pathname.endsWith('/reports/2026-10-19.json'))return response({meta:{data_date:'2026-10-19',report_date:'2026-10-19'},stocks:[]});
+    return response(fixtures[url.pathname]);
+  }});
+  const data=await b.api('/api/dashboard?date=2026-10-19');assert.equal(data.meta.report_date,'2026-10-19');assert.equal(data.meta.report_selection,undefined);assert.equal(data.meta.snapshot_transport.generated_at,current.generated_at);
+});
 test('phone fetches only repository-relative public files and retries a transient failure',async()=>{
   let fails=1;
   const b=browser({fetch:async(url,init,fixtures)=>{if(url.pathname.endsWith('manifest.json')&&fails-- >0)return {ok:false,status:503};return response(fixtures[url.pathname]);}});

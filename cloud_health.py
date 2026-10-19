@@ -1,7 +1,8 @@
 """Read-only acceptance of the public Pages research JSON snapshot.
 
-This verifies the four named public JSON resources, not every mobile network,
-the HTML UI, real-time quotes, model accuracy or a guaranteed publication SLA.
+This verifies the four named public JSON resources and completed-session data
+freshness, not every mobile network, the HTML UI, real-time quotes, model accuracy
+or a guaranteed publication SLA. Morning report readiness remains independent.
 No account, token, data mutation, order or report-generation interface is used.
 """
 from __future__ import annotations
@@ -29,9 +30,10 @@ RESOURCE_URLS = {name: BASE_URL + "data/" + name + ".json" for name in MAX_BYTES
 
 
 class HealthError(ValueError):
-    def __init__(self, code, detail):
+    def __init__(self, code, detail, details=None):
         super().__init__(detail)
         self.code, self.detail = code, detail
+        self.details = details or {}
 
 
 def _allowed(url):
@@ -178,7 +180,15 @@ def _validate(manifest, plan, calendars, system, moment, require_morning, expect
     if "buy" not in plan or (plan["buy"] is not None and not isinstance(plan["buy"], dict)):
         raise HealthError("plan_buy_shape", "日报买入研究字段缺失或格式无效；null是有效的无合格推荐状态。")
     anchor = dt.datetime.combine(moment.date(), dt.time(9), TZ)
-    expected = _last_completed(calendars, anchor, validated) if trading else latest
+    expected_morning = _last_completed(calendars, anchor, validated) if trading else latest
+    # Daily bars may lag the closing bell. The previous session is the minimum
+    # acceptable data date until 16:20; genuinely completed newer data is allowed.
+    # Afterwards an old but readable snapshot is a failed freshness check.
+    before_close_deadline = trading and moment.time().replace(tzinfo=None) < dt.time(16, 20)
+    expected = expected_morning if before_close_deadline else latest
+    data_ready = data_date.isoformat() >= expected
+    awaiting_close = (data_ready and before_close_deadline and latest > data_date.isoformat())
+    data_status = "await_close_publication" if awaiting_close else "ready" if data_ready else "stale"
     morning_ready = False
     morning_errors = []
     if trading:
@@ -187,8 +197,8 @@ def _validate(manifest, plan, calendars, system, moment, require_morning, expect
             (plan.get("date") == moment.date().isoformat(), "morning_wrong_date", "日报日期不是今天。"),
             (plan.get("morning_ready") is True, "morning_not_ready", "当天08/09研究与来源核验尚未齐备。"),
             (plan.get("late") is False, "morning_late", "当天日报为迟到恢复或未声明非迟到状态。"),
-            (plan.get("data_date") == expected and data_date.isoformat() == expected,
-             "morning_data_date", "晨报/快照行情日未与09:00时可用的官方最近完整交易日一致。"),
+            (plan.get("data_date") == expected_morning,
+             "morning_data_date", "晨报行情日未与09:00时可用的官方最近完整交易日一致。"),
         ]
         for passed, code, detail in conditions:
             if not passed:
@@ -201,17 +211,29 @@ def _validate(manifest, plan, calendars, system, moment, require_morning, expect
         except HealthError as exc:
             morning_errors.append({"code": exc.code, "detail": exc.detail})
         morning_ready = not morning_errors
-    if require_morning and trading and morning_errors:
-        raise HealthError("morning_unready", "；".join(item["detail"] for item in morning_errors))
-    return {"status": "healthy" if trading else "skipped", "version": app_version,
+    details = {"status": "healthy" if trading else "skipped", "version": app_version,
             "generated_at": generated.isoformat(), "data_date": data_date.isoformat(),
             "expected_data_date": expected, "latest_completed_session": latest,
-            "data_fresh_for_morning": data_date.isoformat() == expected,
+            "snapshot_readable": True, "data_ready": data_ready, "data_status": data_status,
+            "expected_morning_data_date": expected_morning,
+            "data_fresh_for_morning": data_date.isoformat() == expected_morning,
+            "close_publication_deadline": "16:20 Asia/Shanghai",
             "trading_day": trading,
             "morning": {"required": require_morning, "ready": morning_ready,
                         "status": "ready" if morning_ready else "unready" if trading else "closed",
                         "issues": morning_errors},
-            "message": "四个公开JSON快照可读且一致。" if trading else "官方交易日历休市，跳过晨报要求。"}
+            "message": ("四个公开JSON快照可读且一致，等待16:20收盘更新验收。" if awaiting_close
+                        else "四个公开JSON快照可读且一致，行情日期符合当前完整交易日要求。" if trading
+                        else "官方交易日历休市，行情日期符合最近完整交易日，跳过晨报要求。")}
+    if not data_ready:
+        details.update(status="stale", message="公开快照可读，但完整交易日行情尚未更新。")
+        raise HealthError("stale_market_data",
+                          f"公开行情仍为{data_date.isoformat()}，当前应至少更新至{expected}；快照可读不代表行情新鲜。",
+                          details)
+    if require_morning and trading and morning_errors:
+        raise HealthError("morning_unready", "；".join(item["detail"] for item in morning_errors),
+                          {**details, "status": "error", "message": "快照可读且行情日期合格，但盘前日报未通过核验。"})
+    return details
 
 
 def check_site(*, now=None, loader=None, require_morning=False, expected_version=None, attempts=2):
@@ -219,7 +241,9 @@ def check_site(*, now=None, loader=None, require_morning=False, expected_version
 
     A test loader receives each complete fixed URL and returns dict, UTF-8 bytes
     or text. Each attempt reads manifest before and after the other resources.
-    ``require_morning`` is explicit; ordinary checks do not demand a buy signal.
+    All checks require completed-session freshness after the 16:20 close-data
+    deadline. ``require_morning`` separately requests the immutable morning
+    report acceptance; ordinary checks do not demand a buy signal.
     """
     supplied_now = now is not None
     moment = now or dt.datetime.now(TZ)
@@ -229,6 +253,7 @@ def check_site(*, now=None, loader=None, require_morning=False, expected_version
     moment = moment.astimezone(TZ)
     base = {"ok": False, "status": "error", "checked_at": moment.isoformat(),
             "site": SITE_URL, "scope": "four-public-json-resources-only", "attempts": 0,
+            "snapshot_readable": False, "data_ready": False, "data_status": "unverified",
             "require_morning": bool(require_morning)}
     if type(attempts) is not int or not 1 <= attempts <= MAX_ATTEMPTS or type(require_morning) is not bool:
         return {**base, "errors": [{"code": "invalid_options", "detail": "检查最多两轮，晨报要求必须为显式布尔值。"}]}
@@ -240,6 +265,7 @@ def check_site(*, now=None, loader=None, require_morning=False, expected_version
     except (KeyError, OSError, ValueError) as exc:
         return {**base, "errors": [{"code": getattr(exc, "code", "source_version_unavailable"), "detail": str(exc)}]}
     failures = []
+    details = {}
     for attempt in range(1, attempts + 1):
         try:
             first = _load("manifest", loader or _download)
@@ -256,9 +282,10 @@ def check_site(*, now=None, loader=None, require_morning=False, expected_version
             return {**base, **details, "ok": True, "attempts": attempt,
                     "expected_version": expected_version, "errors": [], "previous_attempt_errors": failures}
         except (HealthError, OSError, ValueError, TypeError) as exc:
+            details = getattr(exc, "details", {})
             failures.append({"attempt": attempt, "code": getattr(exc, "code", "resource_unavailable"),
                              "detail": getattr(exc, "detail", str(exc))[:1000]})
-    return {**base, "attempts": attempts, "expected_version": expected_version, "errors": failures}
+    return {**base, **details, "attempts": attempts, "expected_version": expected_version, "errors": failures}
 
 
 def main(argv=None):

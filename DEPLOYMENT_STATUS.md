@@ -76,3 +76,11 @@
 - health实际于2026-10-19T16:09:32.602186+08:00读取四份公开JSON，ok=true、version=2.4.1、attempts=1；morning.ready=false且require_morning=false，盘后发布成功不冒充盘前晨报就绪。
 - 线上system实际显示AI late、valid=true、morning_qualified=false，checked_at=2026-10-19T16:08:02.944593+08:00。600241时代万恒、601811新华文轩、688305科德数控详情均为ridge-cycle-v3，risk_status=blocked、blocked=true、eligible=false，entry_low/entry_high/stop_loss/take_profit四项全null。公开daily-plan逐字段等于main归档原10月19日日报；原归档SHA256仍为53ec0c3ccf13ba6c1ded415edb891a61846df454842fd87369e751eef0f80e46，单条日报规范化SHA256为4986a12efe00614cc9894d79c48195e9a81a4b31688e3ac79b4bca2b8f43929f。本次仍未创建备份。
 
+## v2.4.2日期切换与收盘更新修复
+
+- 用户10月19日20:58反馈仍显示16日，切换19日出现公开快照失败。真实公开manifest仍是16:08发布、data_date=16，reports.json只有16日；当天晨报日期19不等于当天行情快照。根因是原采集仅限08点、09:30后一律跳过，没有收盘采集；日期输入又直接拼接不存在的19日报告URL并把404当整体断连。此前发布成功验收遗漏了收盘后数据更新，本条更正该范围。
+- 21:00左右实际读取行情源，指数、600241、601811、688305均已返回19日完整日线。新health于21:06:58.981536真实检查旧2.4.1网站，返回ok=false/status=stale、snapshot_readable=true、data_ready=false、expected_data_date=19、actual=16，证明确实能识别本次问题。
+- 新增北京时间工作日16:20/17:10 collect，仍核验官方SSE交易日；原六个盘前时点保留。收盘collect使用真实时刻与独立github_close_collect收据，不更新晨间资讯/AI或github_collect。晚间publish缺少同日有效收盘覆盖时补采；至少99%同日行情、有效指数及当前模型/风险协议才复用，失败明确error和非零退出。原晨报target16及原发布时间保持，close_research.target19另记，不能补造盘前建议。
+- 日期先查真实档案清单；未生成日期明确显示所选与实际行情日，保留选择、取消买入/价位、隐藏不存在的CSV，不把缺档当整体断连。真正网络/格式失败仍报错；同批发布和清单CDN延迟有回归。页面分列行情日期与公开快照更新时间。
+- 16:20后健康检查要求最新完整交易日行情；16:00—16:19允许等待发布但明确状态，真实已完当日日线可以先通过。晨报有效性与收盘行情独立，绝不要求把原晨报改为收盘数据。相关Python126项、Node41项，共167项重新通过；本机44份源码同步，远端初始seed未修改。本次未创建备份。实际新版本发布及补采结果待后续运行证据记录。
+

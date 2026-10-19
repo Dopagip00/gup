@@ -50,16 +50,80 @@ class CloudHealthTests(unittest.TestCase):
         self.assertEqual(result["status"], "healthy")
         self.assertTrue(result["morning"]["ready"])
         self.assertEqual(result["expected_data_date"], "2026-10-16")
+        self.assertTrue(result["snapshot_readable"])
+        self.assertTrue(result["data_ready"])
+        self.assertEqual(result["data_status"], "ready")
         self.assertEqual(result["attempts"], 1)
         self.assertEqual(len(self.calls), 5)
         self.assertEqual(self.calls[0], self.calls[-1])
         self.assertEqual(self.values, before)
 
     def test_afternoon_morning_acceptance_uses_morning_knowledge_boundary(self):
-        result = self.check(now=self.now.replace(hour=16))
+        result = self.check(now=self.now.replace(hour=16, minute=0))
         self.assertTrue(result["ok"])
         self.assertEqual(result["expected_data_date"], "2026-10-16")
         self.assertEqual(result["latest_completed_session"], "2026-10-19")
+        self.assertEqual(result["expected_morning_data_date"], "2026-10-16")
+        self.assertEqual(result["data_status"], "await_close_publication")
+
+    def test_stale_close_data_fails_at_deadline_even_when_every_json_is_readable(self):
+        for hour, minute in ((16, 20), (17, 10), (21, 0)):
+            with self.subTest(hour=hour, minute=minute):
+                result = self.check(now=self.now.replace(hour=hour, minute=minute), require_morning=False)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["status"], "stale")
+                self.assertTrue(result["snapshot_readable"])
+                self.assertFalse(result["data_ready"])
+                self.assertEqual(result["data_status"], "stale")
+                self.assertEqual(result["data_date"], "2026-10-16")
+                self.assertEqual(result["expected_data_date"], "2026-10-19")
+                self.assertEqual(self.codes(result), {"stale_market_data"})
+                self.assertEqual(result["attempts"], 2)
+        just_before = self.check(now=self.now.replace(hour=16, minute=19, second=59))
+        self.assertTrue(just_before["ok"])
+        self.assertEqual(just_before["data_status"], "await_close_publication")
+
+    def test_fresh_close_snapshot_does_not_force_immutable_morning_plan_to_change(self):
+        before = copy.deepcopy(self.values["daily-plan"])
+        self.values["manifest"].update(generated_at="2026-10-19T16:00:00+08:00", data_date="2026-10-19")
+        result = self.check(now=self.now.replace(hour=21, minute=0))
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["data_ready"])
+        self.assertEqual(result["data_status"], "ready")
+        self.assertEqual(result["expected_data_date"], "2026-10-19")
+        self.assertEqual(result["expected_morning_data_date"], "2026-10-16")
+        self.assertTrue(result["morning"]["ready"])
+        self.assertFalse(result["data_fresh_for_morning"])
+        self.assertEqual(self.values["daily-plan"], before)
+
+    def test_genuine_new_close_data_is_accepted_before_publication_deadline(self):
+        self.values["manifest"].update(generated_at="2026-10-19T16:00:00+08:00", data_date="2026-10-19")
+        result = self.check(now=self.now.replace(hour=16, minute=10))
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["data_ready"])
+        self.assertEqual(result["expected_data_date"], "2026-10-16")
+        self.assertEqual(result["data_status"], "ready")
+
+    def test_stale_previous_session_is_not_accepted_as_current_morning_data(self):
+        self.values["manifest"]["data_date"] = "2026-10-15"
+        result = self.check(require_morning=False)
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["data_ready"])
+        self.assertEqual(result["expected_data_date"], "2026-10-16")
+        self.assertEqual(self.codes(result), {"stale_market_data"})
+
+    def test_weekend_requires_friday_data_and_does_not_require_a_new_weekend_plan(self):
+        self.values["manifest"].update(generated_at="2026-10-23T17:00:00+08:00", data_date="2026-10-23")
+        result = self.check(now=self.now.replace(day=24))
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["trading_day"])
+        self.assertEqual(result["expected_data_date"], "2026-10-23")
+        self.assertEqual(result["morning"]["status"], "closed")
+        self.values["manifest"]["data_date"] = "2026-10-22"
+        stale = self.check(now=self.now.replace(day=24))
+        self.assertFalse(stale["ok"])
+        self.assertEqual(stale["status"], "stale")
+        self.assertEqual(self.codes(stale), {"stale_market_data"})
 
     def test_ordinary_resource_check_does_not_require_morning(self):
         self.values["daily-plan"].update(status="pending", morning_ready=False, late=True, published_at=None)

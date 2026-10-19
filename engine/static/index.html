@@ -27,7 +27,8 @@
     <div class="page-content">
       <div id="global-alert" class="alert" role="alert" hidden></div>
       <section id="view-overview" class="view">
-        <div class="page-heading"><div><div class="eyebrow">DAILY MARKET INTELLIGENCE</div><h1>短线机会</h1><p>每天研究新机会，下一交易日独立跟踪前日建议；交易由你操作。</p></div><div class="heading-actions"><label class="date-picker"><span>研究日期</span><input type="date" id="history-date" aria-label="查看研究日期"></label><button class="button light small" id="today-btn">最新</button><button class="button primary" id="refresh-btn"><span aria-hidden="true">↻</span> 更新研究</button></div></div>
+        <div class="page-heading"><div><div class="eyebrow">DAILY MARKET INTELLIGENCE</div><h1>短线机会</h1><p>每天研究新机会，下一交易日独立跟踪前日建议；交易由你操作。</p></div><div class="heading-actions"><label class="date-picker"><span>行情日期</span><input type="date" id="history-date" aria-label="查看已生成的行情日期"></label><button class="button light small" id="today-btn">最新</button><button class="button primary" id="refresh-btn"><span aria-hidden="true">↻</span> 更新研究</button></div></div>
+        <p class="fine-print" id="research-dates" role="status">行情日期与公开快照更新时间分别核验中。</p>
         <div class="method-note"><span class="note-symbol">i</span><span><strong>预计涨幅是模型估计，误差与区间同样重要。</strong> 默认研究买入日开盘 → 下一交易日收盘的收益近似。逐笔 D1 为建议买入日，D2 为下一交易日卖出参考日；每日新建议与前日跟踪独立，遵守 T+1，节假日顺延。</span><button id="method-btn" class="text-button">策略说明 ↗</button></div>
         <article class="top-pick" id="top-pick">
           <div class="pick-intro"><div class="pick-kicker"><span class="pick-dot"></span> 今日唯一首选 <span id="pick-date"></span></div><h2 id="pick-name">暂无经过验证的首选</h2><p id="pick-thesis">等待有效行情与预测验证。满足全部条件后，仅突出综合排名最高的一只。</p><div class="pick-tags"><span id="pick-horizon">两交易日周期</span><span>排除权重指标股</span><span>遵守 T+1</span></div></div>

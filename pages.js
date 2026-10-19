@@ -90,6 +90,12 @@
   }
   function storageKey(key){return `gup:research-only:${CACHE_SCHEMA}:${baseUrl().href}:${key}`;}
   function protectedCache(key){return key===storageKey('dashboard:latest')||key===storageKey('daily-plan');}
+  function reportDates(value,m){
+    if(!Array.isArray(value))throw new Error('历史报告清单结构无效');
+    const dates=value.map(report=>typeof report==='string'?report:report?.date||report?.report_date);
+    if(dates.some(date=>!validDate(date)||date>m.data_date))throw new Error('历史报告清单日期无效');
+    return dates;
+  }
   function cacheBytes(key,value){return (key.length+value.length)*2;}
   function cacheVictim(keys,incoming){
     return keys.find(key=>!protectedCache(key)) || (protectedCache(incoming)?keys.find(key=>key!==incoming):null);
@@ -100,7 +106,8 @@
       if(!value || typeof value!=='object')throw new Error('公开研究文件结构无效');
       if(path==='data/calendar.json' && Array.isArray(value))throw new Error('交易日历结构无效');
       if(path==='data/dashboard.json' && (!Array.isArray(value.stocks) || value.meta?.data_date!==m.data_date))throw new Error('行情日期与公开快照清单不一致');
-      if(path.startsWith('data/reports/') && (!Array.isArray(value.stocks) || !validDate(value.meta?.data_date) || value.meta.data_date>m.data_date))throw new Error('历史报告日期无效');
+      if(path==='data/reports.json')reportDates(value,m);
+      if(path.startsWith('data/reports/') && (!Array.isArray(value.stocks) || !validDate(value.meta?.data_date) || value.meta.data_date>m.data_date || value.meta?.report_date!==path.slice(-15,-5)))throw new Error('历史报告日期无效');
       if(path==='data/daily-plan.json' && (!validDate(value.date) || value.date>clock(new Date(m.generated_at)).date || (value.sell!==undefined&&!Array.isArray(value.sell))))throw new Error('日报日期或结构无效');
       if(path.startsWith('data/stocks/') && (value.stock?.symbol!==path.slice(-13,-5) || !validDate(value.stock?.date) || value.stock.date>m.data_date))throw new Error('个股代码或日期与快照不一致');
       if(path==='data/longterm.json' && (!Array.isArray(value.stocks) || !validDate(value.as_of) || value.as_of>m.data_date))throw new Error('长线研究日期或结构无效');
@@ -174,13 +181,13 @@
         const data=Object.fromEntries(paths.map((path,i)=>[path,values[i]]));
         validateBundle(paths,data,m);
         saveCache(key,m,data);
-        return {files:structuredClone(data),transport:{mode:'live',generated_at:epoch,data_date:m.data_date}};
+        return {files:structuredClone(data),transport:{mode:'live',generated_at:epoch,data_date:m.data_date},manifest:m};
       }
       throw new Error('公开快照正在更新，请重新读取。');
     }catch(error){
       const cached=readCache(key,paths);
       if(!cached)throw error;
-      return {files:cached.files,transport:{mode:'offline',generated_at:cached.manifest.generated_at,data_date:cached.manifest.data_date,message:'公开网站快照暂时加载失败，当前为离线研究缓存；所有新买入资格已取消。',error:error.message}};
+      return {files:cached.files,transport:{mode:'offline',generated_at:cached.manifest.generated_at,data_date:cached.manifest.data_date,message:'公开网站快照暂时加载失败，当前为离线研究缓存；所有新买入资格已取消。',error:error.message},manifest:cached.manifest};
     }
   }
   function attach(data,transport){if(data && typeof data==='object')data.snapshot_transport=transport;return data;}
@@ -201,10 +208,34 @@
     const u=new URL(path,'https://research.invalid'),name=u.pathname.slice(5);
     if(name==='dashboard'){
       const date=u.searchParams.get('date');
-      if(date&&!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new Error('无效日期');
-      const file=date?`data/reports/${date}.json`:'data/dashboard.json',paths=[file,'data/calendar.json','data/daily-plan.json'];
-      const b=await bundle(paths,`dashboard:${date||'latest'}`),c=context(b.files[paths[1]]);
-      return offlineDashboard(gateDashboard(b.files[file],c,gatePlan(b.files[paths[2]],c)),b.transport);
+      if(date&&!validDate(date))throw new Error('无效日期');
+      let available=true;
+      if(date){const index=await bundle(['data/reports.json'],'reports');available=reportDates(index.files['data/reports.json'],index.manifest).includes(date);}
+      for(let attempt=0;attempt<2;attempt++){
+        const file=date&&available?`data/reports/${date}.json`:'data/dashboard.json';
+        const paths=[file,'data/calendar.json','data/daily-plan.json',...(date?['data/reports.json']:[])];
+        // Missing dates reuse the latest real snapshot and its real cache key.
+        const b=await bundle(paths,`dashboard:${date&&available?date:'latest'}`),c=context(b.files['data/calendar.json']);
+        if(date){
+          const listed=reportDates(b.files['data/reports.json'],b.manifest).includes(date);
+          if(listed!==available){available=listed;continue;}
+        }
+        const data=gateDashboard(b.files[file],c,gatePlan(b.files['data/daily-plan.json'],c));
+        if(date&&!available && data.meta.report_date===date && data.meta.data_date===date){
+          data.meta.report_selection={status:'available',requested_date:date,actual_date:date,source:'latest'};
+          data.meta.warnings=['所选行情已存在于最新真实快照；历史档案清单仍在更新，当前仅作历史复盘。',...(data.meta.warnings||[])];
+          data.meta.daily_buy=null;data.meta.daily_plan_status='history';
+          expire(data.index,'当前选择为历史复盘，不作为新买入建议。');(data.stocks||[]).forEach(stock=>expire(stock,'当前选择为历史复盘，不作为新买入建议。'));
+        }else if(date&&!available){
+          const actual=data.meta.report_date||data.meta.data_date;
+          const reason=`${date} 的行情研究尚未生成；当前展示最近已生成的 ${actual} 行情，日期未替换。请点击“最新”重新读取。`;
+          data.meta.report_selection={status:'unavailable',requested_date:date,actual_date:actual};
+          data.meta.warnings=[reason,...(data.meta.warnings||[])];data.meta.daily_buy=null;data.meta.daily_plan_status='pending';
+          expire(data.index,reason);(data.stocks||[]).forEach(stock=>expire(stock,reason));
+        }
+        return offlineDashboard(data,b.transport);
+      }
+      throw new Error('公开档案清单正在更新，请重新读取。');
     }
     if(name==='stock'){
       const symbol=u.searchParams.get('symbol');if(!/^sh\d{6}$/.test(symbol||''))throw new Error('无效代码');

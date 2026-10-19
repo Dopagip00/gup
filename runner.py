@@ -20,7 +20,7 @@ TZ = dt.timezone(dt.timedelta(hours=8))
 ROOT = Path(__file__).resolve().parent
 PUBLIC_TABLES = ('securities', 'histories', 'signals', 'runs')
 PUBLIC_KEYS = {'ai_review', 'universe_info', 'last_success', 'last_completed', 'valuation_quotes', 'longterm',
-               'morning_news', 'quotes', 'github_collect', 'github_publish', 'github_fundamentals', 'github_run_status', 'model_recalculation'}
+               'morning_news', 'quotes', 'github_collect', 'github_close_collect', 'github_publish', 'github_fundamentals', 'github_run_status', 'model_recalculation'}
 PUBLIC_SCHEMA = {
     'securities': ('symbol', 'name', 'active'),
     'histories': ('symbol', 'payload', 'updated_at'),
@@ -356,8 +356,8 @@ def short_term_refresh(core, target):
         module.refresh_fundamentals = original
 
 
-def current_morning_research(core, moment, target):
-    """Reuse a proved current morning report, never manufacture a new receipt.
+def _current_research(core, moment, target, *, after_close=False):
+    """Reuse a proved report within its actual collection period.
 
     The completion receipt alone is insufficient after a source upgrade: every
     fresh active signal must also carry the current model and chase policy.
@@ -381,8 +381,9 @@ def current_morning_research(core, moment, target):
         if finished.tzinfo is None:
             return None
         finished = finished.astimezone(TZ)
-        if not (finished.date() == moment.date() and dt.time(8) <= finished.time().replace(tzinfo=None)
-                < dt.time(9, 30) and finished <= moment):
+        clock = finished.time().replace(tzinfo=None)
+        in_window = clock >= dt.time(16) if after_close else dt.time(8) <= clock < dt.time(9, 30)
+        if not (finished.date() == moment.date() and in_window and finished <= moment):
             return None
         total, ok, failed = (receipt.get(key) for key in ('total', 'ok', 'failed'))
         if not (type(total) is int and type(ok) is int and type(failed) is int
@@ -390,6 +391,12 @@ def current_morning_research(core, moment, target):
                 and ok + failed == total and ok / total >= .99):
             return None
         with core.connect() as con:
+            if after_close:
+                index = con.execute("SELECT payload FROM signals WHERE symbol='sh000001' AND report_date=?", (target,)).fetchone()
+                benchmark = json.loads(index[0]) if index else None
+                if not (isinstance(benchmark, dict) and benchmark.get('date') == target
+                        and benchmark.get('stale') is not True):
+                    return None
             rows = con.execute('''SELECT s.symbol,g.payload FROM securities s
                 LEFT JOIN signals g ON g.symbol=s.symbol AND g.report_date=?
                 WHERE s.active=1 AND s.symbol<>'sh000001' ORDER BY s.symbol''', (target,)).fetchall()
@@ -417,6 +424,68 @@ def current_morning_research(core, moment, target):
         return None
 
 
+def current_morning_research(core, moment, target):
+    """A closing refresh can never become a morning completion receipt."""
+    return _current_research(core, moment, target)
+
+
+def current_close_research(core, moment, target):
+    return _current_research(core, moment, target, after_close=True)
+
+
+def collect_after_close(core, service, moment):
+    """Refresh real completed daily bars without rewriting the morning record."""
+    date = moment.date().isoformat()
+    target = core.md.last_completed_session(moment)
+    result = {'date': date, 'stage': 'collect', 'collection_period': 'after_close',
+              'started_at': moment.isoformat(), 'target_date': target,
+              'mode': 'manual_research', 'morning_collection': False}
+    cached = current_close_research(core, moment, target)
+    if cached:
+        result.update(status='cached', research=cached, research_cached=True,
+                      research_finished_at=cached['finished_at'], finished_at=core.now().isoformat(),
+                      message='复用已核验的当日收盘行情；保留真实完成时间，不作为盘前采集或改写原日报。')
+        core.putkv('github_close_collect', result)
+        return result
+    previous = core.getkv('last_success', {})
+    try:
+        if target != date or core.expected_date() != target:
+            raise ValueError('官方收盘交易日与当前日期不一致')
+        if previous.get('target_date') == target:
+            core.putkv('last_success', {})
+        with short_term_refresh(core, target):
+            service.refresh(force=False)
+        finished = core.now()
+        receipt = current_close_research(core, finished, target)
+        if (service.status.get('status') not in ('success', 'partial') or receipt is None
+                or dt.datetime.fromisoformat(receipt['finished_at']).astimezone(TZ) < moment):
+            raise RuntimeError('收盘刷新未取得同日有效指数、模型与至少99%行情覆盖')
+        result.update(status=service.status['status'], research=dict(service.status),
+                      research_finished_at=receipt['finished_at'], finished_at=finished.isoformat(),
+                      message='已采集真实收盘行情；不补造晨间资讯、AI复核或买入建议。')
+    except Exception as exc:
+        result.update(status='error', error=type(exc).__name__, finished_at=core.now().isoformat(),
+                      reason='收盘行情刷新未通过完整性核验；不能将旧行情标为当日成功。')
+    finally:
+        if not core.getkv('last_success') and previous:
+            core.putkv('last_success', previous)
+    core.putkv('github_close_collect', result)
+    return result
+
+
+def needs_cached_recalculation(stage, core, moment):
+    if stage == 'collect':
+        return False
+    if (stage == 'publish' and moment.time().replace(tzinfo=None) >= dt.time(16)
+            and core.md.is_trading_day(moment.date().isoformat())):
+        target = core.md.last_completed_session(moment)
+        if current_close_research(core, moment, target) is None:
+            # The real collection computes the current model on new bars. Do
+            # not first spend several minutes recomputing the old report.
+            return False
+    return True
+
+
 def run_stage(stage, core, service):
     moment = core.now(); date = moment.date().isoformat()
     result = {'date': date, 'stage': stage, 'started_at': moment.isoformat(), 'mode': 'manual_research'}
@@ -424,6 +493,9 @@ def run_stage(stage, core, service):
         return dict(result, status='closed', reason='上交所官方日历休市，跳过采集与新推荐')
     target = core.md.last_completed_session(moment.replace(hour=9, minute=0, second=0, microsecond=0))
     result['target_date'] = target
+    after_close = moment.time().replace(tzinfo=None) >= dt.time(16)
+    if stage == 'collect' and after_close:
+        return collect_after_close(core, service, moment)
     if stage in ('collect','publish'):
         core.putkv('ai_review', load_ai_review(ROOT, now=moment, signal_date=target))
     if stage == 'collect':
@@ -464,6 +536,13 @@ def run_stage(stage, core, service):
     elif stage == 'publish':
         if moment.time().replace(tzinfo=None) < dt.time(9):
             return dict(result, status='skipped', reason='尚未到北京时间09:00，禁止提前发布')
+        if after_close:
+            result['close_research'] = collect_after_close(core, service, moment)
+            if result['close_research']['status'] == 'error':
+                result.update(status='error', finished_at=core.now().isoformat(),
+                              reason='当日收盘行情采集失败，保留原日报并使本次云端任务明确失败。')
+                core.putkv('github_publish', result)
+                return result
         if moment.time().replace(tzinfo=None) < dt.time(9, 30):
             # Same authorized 09:00 job: recheck newly published notices before
             # selection, retaining the actual new completion time and receipts.
@@ -524,12 +603,13 @@ def main(argv=None):
     service = core.Service()
     failure = False
     try:
-        if args.stage != 'collect':
+        if needs_cached_recalculation(args.stage, core, core.now()):
             recalculation = importlib.import_module('model_refresh').refresh_cached_predictions(core)
             core.putkv('model_recalculation', recalculation)
             if recalculation.get('status') in ('error', 'conflict'):
                 raise RuntimeError('模型重算失败或源数据已变化，暂停本次研究发布')
         result = run_stage(args.stage, core, service)
+        failure = result.get('status') in ('error', 'conflict')
     except Exception as exc:
         result = {'date': core.now().date().isoformat(), 'stage': args.stage, 'status': 'error', 'finished_at': core.now().isoformat(),
                   'error': type(exc).__name__, 'mode': 'manual_research', 'message': '本次研究未完成；禁止将旧内容标作当日成功。'}

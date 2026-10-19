@@ -22,6 +22,9 @@ on:
     - cron: '0 1 * * 1-5'
     - cron: '7 1 * * 1-5'
     - cron: '17 1 * * 1-5'
+    # Separate closing-bar updates, not morning collection or new daily advice.
+    - cron: '20 8 * * 1-5'
+    - cron: '10 9 * * 1-5'
   workflow_dispatch:
     inputs:
       stage:
@@ -66,7 +69,7 @@ jobs:
           case "$EVENT_NAME" in
             schedule)
               case "$SCHEDULE" in
-                '0 0 * * 1-5'|'17 0 * * 1-5'|'43 0 * * 1-5') stage=collect ;;
+                '0 0 * * 1-5'|'17 0 * * 1-5'|'43 0 * * 1-5'|'20 8 * * 1-5'|'10 9 * * 1-5') stage=collect ;;
                 '0 1 * * 1-5'|'7 1 * * 1-5'|'17 1 * * 1-5') stage=publish ;;
                 *) echo '::error::Unrecognized research schedule'; exit 1 ;;
               esac ;;

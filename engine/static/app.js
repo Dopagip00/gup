@@ -109,7 +109,9 @@ function renderDashboard(data) {
   text('refresh-btn',running?`同步中 ${status.completed || 0}/${status.total || '—'}`:publicSnapshot()?offline?'↻ 重试读取快照':'↻ 重新读取快照':'↻ 更新研究');
   const warnings=list(m.warnings).map(String);
   if(offline)warnings.unshift(`${m.snapshot_transport.message||'正在查看离线研究缓存，新买入资格已取消。'} 快照生成：${shortTime(m.snapshot_transport.generated_at)}；点击上方重试。`);
-  if(state.historyDate) warnings.unshift(`历史研究快照：${state.historyDate}。历史价位仅用于复盘，不能作为当前委托依据。`);
+  const missingReport=m.report_selection?.status==='unavailable';
+  if(state.historyDate && !missingReport) warnings.unshift(`历史行情研究：${m.report_date||state.historyDate}。历史价位仅用于复盘，不能作为当前委托依据。`);
+  if(missingReport)warnings.unshift(`所选行情日期 ${m.report_selection.requested_date} 尚未生成。当前展示 ${m.report_selection.actual_date} 的真实行情研究；新买入资格已取消。`);
   if(status.status==='error' && status.error) warnings.push(status.error);
   if(running) warnings.unshift(`${status.phase || '正在下载和分析行情'}${status.total?` · 已处理 ${status.completed||0} / ${status.total} 只`:''}。已有结果会逐步显示。`);
   $('global-alert').hidden=!warnings.length;
@@ -136,6 +138,8 @@ function renderDashboard(data) {
   if(!reasons.length)reasons=[running?'正在同步行情，完成后显示趋势依据。':'趋势评估基于完整日线，盘中波动不直接替换收盘研究。'];
   reasons.forEach(r=>brief.append(node('li','',typeof r==='object'?r.description||r.label||JSON.stringify(r):r)));
   text('data-date',m.data_date || m.report_date); text('next-run',shortTime(m.next_run));
+  const snapshotAt=m.snapshot_transport?.generated_at||(typeof m.last_success==='object'?m.last_success?.finished_at:null);
+  text('research-dates',`行情日期：${m.data_date||m.report_date||'尚无数据'} · ${publicSnapshot()?'公开快照更新':'研究完成'}：${shortTime(snapshotAt)} · 北京时间${missingReport?` · 所选 ${m.report_selection.requested_date} 尚未生成`:''}`);
   text('index-chart-date',ix.date || '收盘数据');
   text('index-chart-caption',ix.source?`数据：${ix.source}`:'历史走势不代表未来表现');
   text('stock-count',`${opportunities.length} 只合格`);
@@ -144,6 +148,7 @@ function renderDashboard(data) {
   text('settings-last-success',lastSuccess && typeof lastSuccess==='object'?`${shortTime(lastSuccess.finished_at)}${lastSuccess.target_date?` · 交易日 ${lastSuccess.target_date}`:''}`:shortTime(lastSuccess));
   text('settings-schedule',m.schedule); text('settings-next-run',shortTime(m.next_run));
   $('export-btn').href=`/api/export.csv${state.historyDate?`?date=${encodeURIComponent(state.historyDate)}`:''}`;
+  $('export-btn').hidden=missingReport||m.report_selection?.source==='latest';
   if(!state.historyDate)$('history-date').value=m.report_date || m.data_date || '';
   renderTopPick(stocks); renderStocks(); drawIndex(); renderRuns(data.runs || []);
   text('hosting-mode-badge',m.hosted?'云端调度':'本机服务');

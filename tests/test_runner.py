@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -76,6 +77,25 @@ class RunnerTests(unittest.TestCase):
             raw=con.execute("SELECT payload FROM signals WHERE symbol='sh600000'").fetchone()[0]
             signal=json.loads(raw);edit(signal)
             con.execute("UPDATE signals SET payload=? WHERE symbol='sh600000'",(json.dumps(signal),))
+
+    def closing_core(self):
+        core=FakeCore(dt.datetime(2026,10,19,20,58,tzinfo=runner.TZ))
+        core.md.last_completed_session=lambda moment: '2026-10-19' if moment.hour>=16 else '2026-10-16'
+        core.expected_date=lambda:'2026-10-19'
+        return core
+
+    def closing_cache(self, core):
+        receipt=dict(core.getkv('last_completed') or self.current_cache(core))
+        receipt.update(target_date='2026-10-19',finished_at='2026-10-19T16:27:00+08:00')
+        core.putkv('last_completed',dict(receipt));core.putkv('last_success',dict(receipt))
+        with core.connect() as con:
+            for symbol,raw in con.execute('SELECT symbol,payload FROM signals').fetchall():
+                signal=json.loads(raw);signal['date']='2026-10-19'
+                signal['prediction']['as_of_date']='2026-10-19'
+                signal['chase_risk']['as_of_date']='2026-10-19'
+                con.execute('UPDATE signals SET report_date=?,payload=? WHERE symbol=?',('2026-10-19',json.dumps(signal),symbol))
+            con.execute('INSERT OR REPLACE INTO signals VALUES(?,?,?)',('2026-10-19','sh000001',json.dumps({'date':'2026-10-19','stale':False})))
+        return receipt
 
     def test_public_cache_contains_no_accounts_settings_or_deleted_private_bytes(self):
         source=self.root/'source.sqlite3';make_db(source)
@@ -158,16 +178,114 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):runner.run_stage('collect',core,service)
         self.assertEqual(core.getkv('last_success'),old)
 
-    def test_afternoon_start_cannot_fabricate_morning_collection(self):
-        core=FakeCore(dt.datetime(2026,10,19,16,tzinfo=runner.TZ));service=Mock()
-        with patch.object(runner,'collect_news') as news:
-            self.assertEqual(runner.run_stage('collect',core,service)['status'],'late_skipped')
-            news.assert_not_called();service.refresh.assert_not_called()
+    def test_closing_collection_has_a_separate_receipt_and_preserves_morning_evidence(self):
+        core=self.closing_core();self.current_cache(core);service=Mock()
+        core.putkv('github_collect',{'finished_at':'2026-10-19T08:12:00+08:00'})
+        core.putkv('morning_news',{'as_of':'2026-10-19T09:00:00+08:00'})
+        core.putkv('ai_review',{'status':'late','review':{'signal_date':'2026-10-16'}})
+        original=copy.deepcopy(core.values)
+        service.status={'status':'partial','ok':99,'failed':1,'total':100}
+        def refresh(force):
+            self.assertFalse(force)
+            self.closing_cache(core)
+            receipt=dict(core.getkv('last_completed'),finished_at=core.now().isoformat(),status='partial',ok=99,failed=1)
+            core.putkv('last_completed',receipt)
+            self.edit_signal(core,lambda signal:signal.update(stale=True,date='2026-10-16'))
+        service.refresh.side_effect=refresh
+        with patch.object(runner,'collect_news') as news,patch.object(runner,'load_ai_review') as ai,patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()) as short:
+            result=runner.run_stage('collect',core,service)
+        self.assertEqual(result['status'],'partial');self.assertEqual(result['target_date'],'2026-10-19')
+        self.assertEqual(result['collection_period'],'after_close');self.assertFalse(result['morning_collection'])
+        self.assertEqual(core.getkv('github_close_collect'),result)
+        self.assertTrue(runner.public_key('github_close_collect'))
+        for key in ('github_collect','morning_news','ai_review'):
+            self.assertEqual(core.getkv(key),original[key])
+        news.assert_not_called();ai.assert_not_called();short.assert_called_once_with(core,'2026-10-19')
+        self.assertIsNone(runner.current_morning_research(core,core.now(),'2026-10-19'))
+
+    def test_closing_cache_is_reused_with_original_time_and_requires_fresh_benchmark(self):
+        core=self.closing_core();receipt=self.closing_cache(core);service=Mock()
+        with patch.object(runner,'collect_news') as news,patch.object(runner,'short_term_refresh') as short:
+            result=runner.run_stage('collect',core,service)
+        self.assertEqual(result['status'],'cached');self.assertEqual(result['research'],receipt)
+        self.assertEqual(result['research_finished_at'],'2026-10-19T16:27:00+08:00')
+        self.assertEqual(core.getkv('last_completed'),receipt)
+        news.assert_not_called();short.assert_not_called();service.refresh.assert_not_called()
+        for stamp in ('2026-10-19T08:27:00+08:00','2026-10-18T16:27:00+08:00',
+                      '2026-10-19T22:00:00+08:00','2026-10-19T16:27:00'):
+            with self.subTest(stamp=stamp):
+                core.putkv('last_completed',dict(receipt,finished_at=stamp))
+                self.assertIsNone(runner.current_close_research(core,core.now(),'2026-10-19'))
+        core.putkv('last_completed',receipt)
+        with core.connect() as con:con.execute("DELETE FROM signals WHERE symbol='sh000001'")
+        self.assertIsNone(runner.current_close_research(core,core.now(),'2026-10-19'))
+
+    def test_closing_holiday_cannot_refresh_or_publish(self):
+        core=self.closing_core();core.md.is_trading_day=lambda date:False;service=Mock()
+        with patch.object(runner,'collect_news') as news,patch.object(runner,'collect_after_close') as closing:
+            for stage in ('collect','publish'):
+                self.assertEqual(runner.run_stage(stage,core,service)['status'],'closed')
+        news.assert_not_called();closing.assert_not_called();service.refresh.assert_not_called()
+
+    def test_closing_refresh_errors_or_unproved_coverage_cannot_be_hidden_by_publishing(self):
+        for outcome in ('raises','running','partial'):
+            with self.subTest(outcome=outcome):
+                core=self.closing_core();old={'target_date':'2026-10-16','finished_at':'2026-10-19T08:12:00+08:00'}
+                core.putkv('last_success',dict(old));service=Mock();service.status={'status':outcome}
+                if outcome=='raises':service.refresh.side_effect=RuntimeError('provider failed')
+                publish=Mock(return_value={'status':'published'})
+                with patch.object(runner,'load_ai_review'),patch.object(runner,'collect_news') as news,patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()),patch.object(runner.importlib,'import_module',return_value=types.SimpleNamespace(publish=publish)):
+                    result=runner.run_stage('publish',core,service)
+                self.assertEqual(result['status'],'error');self.assertEqual(result['close_research']['status'],'error')
+                self.assertEqual(core.getkv('github_close_collect')['status'],'error')
+                self.assertEqual(core.getkv('last_success'),old)
+                publish.assert_not_called();news.assert_not_called()
+
+    def test_evening_push_refreshes_before_returning_the_immutable_original_plan(self):
+        core=self.closing_core();service=Mock();order=[]
+        original={'status':'published','published_at':'2026-10-19T09:53:39+08:00','morning_ready':False,'late':True,'buy':None,'sell':[]}
+        core.putkv('daily_plan:2026-10-19',copy.deepcopy(original))
+        publish=Mock(side_effect=lambda:order.append('original-plan') or core.getkv('daily_plan:2026-10-19'))
+        receipt={'status':'late','valid':True}
+        with patch.object(runner,'load_ai_review',return_value=receipt) as ai,patch.object(runner,'collect_after_close',side_effect=lambda *args:order.append('closing-bars') or {'status':'partial','target_date':'2026-10-19'}) as closing,patch.object(runner,'collect_news') as news,patch.object(runner.importlib,'import_module',return_value=types.SimpleNamespace(publish=publish)):
+            result=runner.run_stage('publish',core,service)
+        self.assertEqual(order,['closing-bars','original-plan'])
+        self.assertEqual(result['target_date'],'2026-10-16')
+        self.assertEqual(result['close_research']['target_date'],'2026-10-19')
+        self.assertEqual(result['published_at'],original['published_at'])
+        self.assertEqual(core.getkv('daily_plan:2026-10-19'),original)
+        ai.assert_called_once_with(runner.ROOT,now=core.now(),signal_date='2026-10-16')
+        news.assert_not_called()
+
+    def test_evening_actual_collection_skips_recomputing_the_obsolete_report_first(self):
+        core=self.closing_core()
+        self.assertFalse(runner.needs_cached_recalculation('collect',core,core.now()))
+        self.assertFalse(runner.needs_cached_recalculation('publish',core,core.now()))
+        self.closing_cache(core)
+        self.assertTrue(runner.needs_cached_recalculation('publish',core,core.now()))
+        core.now=lambda:dt.datetime(2026,10,19,9,7,tzinfo=runner.TZ)
+        self.assertTrue(runner.needs_cached_recalculation('publish',core,core.now()))
+
+    def test_explicit_collection_failure_makes_main_exit_nonzero_with_an_honest_status(self):
+        engine=self.root/'engine';engine.mkdir();(engine/'core.py').touch()
+        core=self.closing_core();core.init_db=Mock();core.Service=Mock(return_value=Mock())
+        output=self.root/'public'
+        exporter=types.SimpleNamespace(export_site=Mock())
+        imported=[]
+        def module(name):
+            imported.append(name)
+            return {'core':core,'export_static':exporter}[name]
+        failure={'stage':'publish','status':'error','close_research':{'status':'error','target_date':'2026-10-19'}}
+        with patch.object(runner,'restore_cache',return_value=True),patch.object(runner,'restore_plans',return_value=0),patch.object(runner,'save_plans',return_value=0),patch.object(runner,'save_cache'),patch.object(runner,'needs_cached_recalculation',return_value=False),patch.object(runner,'run_stage',return_value=failure),patch.object(runner.importlib,'import_module',side_effect=module),patch.dict(os.environ,{'GITHUB_OUTPUT':''}):
+            code=runner.main(['publish','--engine-dir',str(engine),'--state-dir',str(self.root/'state'),'--output-dir',str(output)])
+        self.assertEqual(code,1);self.assertNotIn('model_refresh',imported)
+        self.assertEqual(json.loads((output/'run-status.json').read_text(encoding='utf-8'))['status'],'error')
+        self.assertEqual(core.getkv('github_run_status')['close_research']['status'],'error')
 
     def test_collection_starts_market_work_only_between_eight_and_nine(self):
         for hour,minute,second,expected in ((7,59,59,'skipped'),(8,0,0,'partial'),
                 (8,59,59,'partial'),(9,0,0,'skipped'),(9,29,59,'skipped'),
-                (9,30,0,'late_skipped'),(16,0,0,'late_skipped')):
+                (9,30,0,'late_skipped'),(15,59,59,'late_skipped')):
             with self.subTest(time=(hour,minute,second)):
                 core=FakeCore(dt.datetime(2026,10,19,hour,minute,second,tzinfo=runner.TZ))
                 previous={'target_date':'2026-10-16','finished_at':'2026-10-16T16:00:00+08:00'}
@@ -273,13 +391,14 @@ class RunnerTests(unittest.TestCase):
             {'target_date':'2026-10-16','chase_policy_version':'anti-chase-v1'})
 
     def test_publish_rechecks_current_news_before_selection_but_late_recovery_does_not(self):
-        for hour,minute,recheck in ((9,0,True),(9,29,True),(9,30,False),(16,0,False)):
-            core=FakeCore(dt.datetime(2026,10,19,hour,minute,tzinfo=runner.TZ));order=[]
+        for hour,minute,recheck in ((9,0,True),(9,29,True),(9,30,False),(15,59,False)):
+            core=FakeCore(dt.datetime(2026,10,19,hour,minute,tzinfo=runner.TZ));order=[];service=Mock()
             publish=Mock(side_effect=lambda:order.append('publish') or {'status':'published'})
             with patch.object(runner,'collect_news',side_effect=lambda core:order.append('news')) as news,patch.object(runner.importlib,'import_module',return_value=types.SimpleNamespace(publish=publish)):
-                runner.run_stage('publish',core,Mock())
+                runner.run_stage('publish',core,service)
             self.assertEqual(order,['news','publish'] if recheck else ['publish'])
             self.assertEqual(news.call_count,int(recheck))
+            service.refresh.assert_not_called()
 
     def test_news_window_receives_the_official_completed_session(self):
         core=FakeCore();collect=Mock(return_value={'status':'verified','as_of':'2026-10-19T08:30:00+08:00'})
