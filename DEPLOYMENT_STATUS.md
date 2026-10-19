@@ -67,3 +67,12 @@
 - 203项平台、113项GitHub适配、28项前端检查通过，共344项；真实本机重算2320只中2316成功、4缺失且保守禁用，网络未采集。真实云端重算当前2318只中2316有效、2缺失，公开四JSON健康检查success。seed压缩上限由95MiB调整为128MiB以容纳新增证据，原始700MiB与4MiB分片限制仍在；远端seed原始分片没有上传替换。
 - 用户最新偏好已写入交接和操作指引：只有明确要求才备份；本轮没有创建源码ZIP、数据库快照或旧清单备份。维护校验清单允许原位更新，默认不另存旧文件。
 
+## v2.4.1手机缓存容量修复
+
+- 来源提交bcadb7de2bd09f0624e78967f9cbc39b6933288f；真实自动发布：https://github.com/Dopagip00/gup/actions/runs/39220543186 。北京时间16:07:35开始、16:09:42完成，research、deploy、health、cloud-status均success，两个长线阶段按push跳过。公开manifest前后稳定为2.4.1，generated_at=2026-10-19T16:08:38.779232+08:00。
+- v2.4新增验证证据后，公开首页曾达到约19.6MB UTF16，超出常见手机缓存空间。此补丁仅压缩表格投影：完整原始机会、风险阈值和解释保留在逐股详情；明确拒绝行省略重复协议和通过标记，缺省资格仍严格关闭。真正合格行保留全部前端硬门槛，不以省略字段放行股票。
+- 生产2318行实际dashboard：UTF8=1,273,842字节，JSON字符数977,253，UTF16=1,954,506字节；含实际manifest、calendar、daily-plan及storage key的完整首页缓存约1,959,964字节，低于3MiB总预算。保留缓存schema3，超大旧条目拒收；内存和localStorage均按UTF16总量驱逐，优先保留最新首页与日报；遇真实QuotaExceeded仅有界回收本站自有旧条目后重试。不保证所有手机空间，但存储失败不会破坏在线读取。
+- 203项平台检查维持通过，GitHub适配115项、Node前端32项重新通过，共350项；包含大快照容量、真实配额错误、离线撤销买入、缺省资格关闭和合格行保留门槛。44份本机源码与公开engine逐字节同步；本机/api/health返回ok=true，/api/system确认2.4.1。
+- health实际于2026-10-19T16:09:32.602186+08:00读取四份公开JSON，ok=true、version=2.4.1、attempts=1；morning.ready=false且require_morning=false，盘后发布成功不冒充盘前晨报就绪。
+- 线上system实际显示AI late、valid=true、morning_qualified=false，checked_at=2026-10-19T16:08:02.944593+08:00。600241时代万恒、601811新华文轩、688305科德数控详情均为ridge-cycle-v3，risk_status=blocked、blocked=true、eligible=false，entry_low/entry_high/stop_loss/take_profit四项全null。公开daily-plan逐字段等于main归档原10月19日日报；原归档SHA256仍为53ec0c3ccf13ba6c1ded415edb891a61846df454842fd87369e751eef0f80e46，单条日报规范化SHA256为4986a12efe00614cc9894d79c48195e9a81a4b31688e3ac79b4bca2b8f43929f。本次仍未创建备份。
+
