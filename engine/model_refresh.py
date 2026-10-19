@@ -191,7 +191,10 @@ def refresh_cached_predictions(core, target=None):
             con.executemany('UPDATE signals SET payload=? WHERE report_date=? AND symbol=?',
                             [(payload, date, symbol) for symbol, payload in updates.items()])
         receipt.update(updated=len(updates), recomputed=len(updates), committed=True)
-        return finish('success' if not receipt['failed'] and not receipt['missing_signal_count'] else 'partial' if receipt['ok'] else 'error')
+        # A later stage can retry only the previously failed stocks while the
+        # rest of this same report already uses the current model. Keep that
+        # usable report partial instead of treating the retry as a total failure.
+        return finish('success' if not receipt['failed'] and not receipt['missing_signal_count'] else 'partial' if receipt['current'] + receipt['ok'] > 0 else 'error')
     except RefreshConflict as exc:
         receipt['errors'].append({'symbol': None, 'error': str(exc)})
         return finish('conflict', '输入在计算期间发生变化；全部重算结果未写入')

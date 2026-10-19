@@ -161,6 +161,46 @@ class ModelRefreshTests(unittest.TestCase):
         self.analyze.assert_not_called()
         self.assertFalse(self.read('sh600001')['prediction']['eligible'])
 
+    def test_repeated_stale_stock_retries_keep_current_market_report_partial(self):
+        # Match the production shape: the first upgrade succeeds for 2316
+        # stocks, then subsequent stages retry only the four stale histories.
+        symbols = ['sh' + str(600001 + index) for index in range(2320)]
+        good_history = {'bars': [{'date': DATE, 'open': 10, 'close': 10.2,
+                                 'high': 10.5, 'low': 9.9, 'volume': 100}]}
+        stale_history = {'bars': [dict(good_history['bars'][0], date='2026-10-15')]}
+        with core.connect() as con:
+            con.executemany('INSERT OR REPLACE INTO securities VALUES(?,?,?)',
+                            [(symbol, '测试股', 1) for symbol in symbols])
+            con.executemany('INSERT OR REPLACE INTO signals VALUES(?,?,?)',
+                            [(DATE, symbol, core.encode(self.old(symbol, '测试股')))
+                             for symbol in symbols])
+            con.executemany('INSERT OR REPLACE INTO histories VALUES(?,?,?)',
+                            [(symbol, core.encode(good_history if index < 2316 else stale_history), NOW.isoformat())
+                             for index, symbol in enumerate(symbols)])
+        first = model_refresh.refresh_cached_predictions(core)
+        self.assertEqual((first['status'], first['current'], first['ok'], first['failed']),
+                         ('partial', 0, 2316, 4))
+
+        def current_payloads():
+            with core.connect() as con:
+                return dict(con.execute('SELECT symbol,payload FROM signals WHERE report_date=? AND symbol<?',
+                                        (DATE, symbols[2316])))
+
+        saved_current = current_payloads()
+        for attempt in range(2):
+            with self.subTest(retry=attempt):
+                self.analyze.reset_mock()
+                receipt = model_refresh.refresh_cached_predictions(core)
+                self.assertEqual((receipt['status'], receipt['current'], receipt['attempted'],
+                                  receipt['ok'], receipt['failed'], receipt['updated']),
+                                 ('partial', 2316, 4, 0, 4, 4))
+                self.assertTrue(receipt['committed'])
+                self.analyze.assert_not_called()
+                self.assertEqual(current_payloads(), saved_current)
+                for symbol in symbols[2316:]:
+                    self.assertFalse(self.read(symbol)['prediction']['available'])
+                    self.assertEqual(self.read(symbol)['recompute_status'], 'error')
+
     def test_failed_recompute_cannot_relabel_old_numbers_as_current_model(self):
         signal = self.read('sh600002')
         signal['prediction'].update(expected_return_pct=12.3, interval_low_pct=9.1,
@@ -191,11 +231,13 @@ class ModelRefreshTests(unittest.TestCase):
 
     def test_analyzer_exception_does_not_become_success(self):
         self.analyze.side_effect = ValueError('计算失败')
-        receipt = model_refresh.refresh_cached_predictions(core)
-        self.assertEqual(receipt['status'], 'error')
-        self.assertEqual(receipt['failed'], 2)
-        self.assertIn('计算失败', receipt['errors'][0]['error'])
-        self.assertFalse(self.read('sh600001')['prediction']['eligible'])
+        for attempt in range(2):
+            with self.subTest(retry=attempt):
+                receipt = model_refresh.refresh_cached_predictions(core)
+                self.assertEqual((receipt['status'], receipt['current'], receipt['ok'], receipt['failed']),
+                                 ('error', 0, 0, 2))
+                self.assertIn('计算失败', receipt['errors'][0]['error'])
+                self.assertFalse(self.read('sh600001')['prediction']['eligible'])
 
     def test_existing_exclusion_survives_offline_recompute(self):
         signal = self.read('sh600001')
