@@ -15,7 +15,8 @@ class WorkflowBranchTests(unittest.TestCase):
 
     def evaluate(self, condition, *, event='schedule', ref='refs/heads/main', research_flag='',
                  deploy_flag='', repository='Dopagip00/gup', default_branch='main',
-                 site_ready='true', stage='', schedule='0 1 * * 1-5', deploy_result='success'):
+                 site_ready='true', stage='', schedule='0 1 * * 1-5', deploy_result='success',
+                 resolved_stage='publish',health_result='success'):
         expression=condition.replace('&&',' and ').replace('||',' or ')
         context={
             'vars':SimpleNamespace(ENABLE_SCHEDULED_RESEARCH=research_flag, ENABLE_PAGES_DEPLOY=deploy_flag),
@@ -24,8 +25,9 @@ class WorkflowBranchTests(unittest.TestCase):
                     inputs=SimpleNamespace(stage=stage), schedule=schedule)),
             'needs':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
                 fundamentals=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
-                deploy=SimpleNamespace(result=deploy_result)),
-            'steps':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready))),
+                deploy=SimpleNamespace(result=deploy_result),health=SimpleNamespace(result=health_result)),
+            'steps':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
+                stage=SimpleNamespace(outputs=SimpleNamespace(stage=resolved_stage))),
             'format':lambda template,*values:template.format(*values),
         }
         return eval(expression,{'__builtins__':{}},context)
@@ -70,9 +72,15 @@ class WorkflowBranchTests(unittest.TestCase):
             self.assertFalse(self.enabled(job,site_ready='false'))
             self.assertTrue(self.enabled(job,deploy_flag='true'))
 
-    def test_only_the_two_authorized_beijing_clocks_remain(self):
+    def test_targets_and_bounded_pre_market_recovery_schedules(self):
         self.assertEqual(re.findall(r"(?m)^    - cron: '([^']+)'$",WORKFLOW),
-            ['0 0 * * 1-5','0 1 * * 1-5'])
+            ['0 0 * * 1-5','17 0 * * 1-5','43 0 * * 1-5',
+             '0 1 * * 1-5','7 1 * * 1-5','17 1 * * 1-5'])
+        # All fallback clocks remain before the engine's 09:30 new-buy cutoff.
+        for minute,hour in re.findall(r"(?m)^    - cron: '(\d+) (\d+) \* \* 1-5'$",WORKFLOW):
+            beijing_minutes=(int(hour)+8)*60+int(minute)
+            self.assertGreaterEqual(beijing_minutes,8*60)
+            self.assertLess(beijing_minutes,9*60+30)
 
     def test_source_push_triggers_but_advice_archive_commits_do_not(self):
         push=WORKFLOW.split('\n  push:\n',1)[1].split('\n  schedule:\n',1)[0]
@@ -86,19 +94,65 @@ class WorkflowBranchTests(unittest.TestCase):
             with self.subTest(unrelated=unrelated):
                 self.assertFalse(any(fnmatchcase(unrelated,pattern) for pattern in patterns))
 
-    def test_source_push_publishes_and_preserves_advice_and_longterm_chain(self):
+    def test_schedules_are_explicitly_mapped_without_unknown_schedule_fallback(self):
+        resolver=self.job('research').split('      - name: Resolve the authorized research stage explicitly',1)[1]
+        resolver=resolver.split('      - name:',1)[0]
+        mapping={}
+        for choices,stage in re.findall(r"(?m)^\s+((?:'[^']+'\|?)+)\) stage=(collect|publish) ;;$",resolver):
+            for schedule in re.findall(r"'([^']+)'",choices):
+                self.assertNotIn(schedule,mapping)
+                mapping[schedule]=stage
+        configured=re.findall(r"(?m)^    - cron: '([^']+)'$",WORKFLOW)
+        self.assertEqual(set(mapping),set(configured))
+        self.assertEqual([schedule for schedule in configured if mapping[schedule]=='collect'],
+            ['0 0 * * 1-5','17 0 * * 1-5','43 0 * * 1-5'])
+        self.assertEqual([schedule for schedule in configured if mapping[schedule]=='publish'],
+            ['0 1 * * 1-5','7 1 * * 1-5','17 1 * * 1-5'])
+        self.assertIn("*) echo '::error::Unrecognized research schedule'; exit 1",resolver)
+        self.assertIn('collect|publish|fundamentals) stage="$REQUESTED_STAGE"',resolver)
+        self.assertIn('push) stage=publish',resolver)
+        self.assertIn("*) echo '::error::Unrecognized research event'; exit 1",resolver)
+
+    def test_publish_retries_preserve_archive_and_do_not_queue_long_financial_jobs(self):
         research=self.job('research')
         stage=re.search(r'(?m)^          RESEARCH_STAGE: \$\{\{ (.+) \}\}$',research).group(1)
-        # Push uses the real-time publisher, with the engine's existing time gates.
-        self.assertEqual(self.evaluate(stage,event='push',schedule=''),'publish')
-        self.assertEqual(self.evaluate(stage,schedule='0 0 * * 1-5'),'collect')
-        self.assertEqual(self.evaluate(stage,event='workflow_dispatch',stage='fundamentals',schedule=''),'fundamentals')
+        self.assertEqual(self.evaluate(stage,resolved_stage='publish'),'publish')
+        self.assertEqual(self.evaluate(stage,resolved_stage='collect'),'collect')
+        self.assertEqual(self.evaluate(stage,resolved_stage='fundamentals'),'fundamentals')
         advice=research.split('      - name: Commit changed public advice archive',1)[1]
         condition=re.search(r'(?m)^        if: (.+)$',advice).group(1)
         self.assertTrue(self.evaluate(condition,event='push',schedule=''))
-        self.assertFalse(self.evaluate(condition,event='schedule',schedule='0 0 * * 1-5'))
-        self.assertTrue(self.enabled('fundamentals',event='push',schedule=''))
+        self.assertFalse(self.evaluate(condition,resolved_stage='collect'))
+        self.assertFalse(self.evaluate(condition,resolved_stage='fundamentals'))
+        for schedule in ('0 1 * * 1-5','7 1 * * 1-5','17 1 * * 1-5'):
+            self.assertTrue(self.evaluate(condition,schedule=schedule))
+            self.assertEqual(self.enabled('fundamentals',schedule=schedule),schedule=='17 1 * * 1-5')
+        self.assertFalse(self.enabled('fundamentals',event='push',schedule=''))
         self.assertFalse(self.enabled('fundamentals',event='push',schedule='',deploy_result='failure'))
+        self.assertFalse(self.enabled('fundamentals',schedule='17 1 * * 1-5',deploy_result='failure'))
+
+    def test_cache_storage_is_bounded_and_public_failure_is_visible(self):
+        self.assertIn('concurrency:\n  group: huyan-research-state\n  cancel-in-progress: false',WORKFLOW)
+        # Collect, publish and financial artifacts remain serialized; a later
+        # financial completion must not race a fresh morning snapshot.
+        for job in ('research','fundamentals'):
+            text=self.job(job)
+            upload=text.split('uses: actions/upload-artifact@v4',1)[1]
+            cache_step=upload.split('      - name:',1)[0]
+            self.assertRegex(cache_step,r'(?m)^          retention-days: 1$')
+        summary=self.job('cloud-status')
+        self.assertIn('if: always()',summary)
+        self.assertIn('needs: [research, deploy, health, fundamentals, deploy-longterm]',summary)
+        self.assertIn("['failure', 'cancelled'].includes(result)",summary)
+        self.assertIn('core.setFailed(',summary)
+        self.assertIn('GitHub schedules can queue or be delayed.',summary)
+
+    def test_public_site_check_finishes_before_long_financial_work_and_failure_stops_it(self):
+        health=self.job('health')
+        self.assertIn('needs: [research, deploy]',health)
+        self.assertNotIn('needs: fundamentals',health)
+        self.assertIn('python cloud_health.py --require-morning',health)
+        self.assertFalse(self.enabled('fundamentals',schedule='17 1 * * 1-5',health_result='failure'))
 
     def test_hidden_research_artifacts_upload_only_the_explicit_public_whitelist(self):
         expected={

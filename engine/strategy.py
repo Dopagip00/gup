@@ -6,6 +6,7 @@ sends orders.  Scores are rules-based ranks, not probabilities or promises.
 from __future__ import annotations
 
 import math
+from decimal import Decimal, ROUND_HALF_UP
 from statistics import mean, median
 
 
@@ -78,6 +79,167 @@ def _restricted(symbol, name):
     return _index(symbol) or "ST" in normalized or "退" in normalized
 
 
+CHASE_POLICY_VERSION = "anti-chase-v1"
+CHASE_RISK_VERSION = CHASE_POLICY_VERSION
+
+
+def _chase_risk(rows, symbol, name, benchmark=None):
+    """Conservative, fixed research constraints, never an expected-return model.
+
+    Only completed supplied bars are used. Raw closes identify price-limit-like
+    closes; a change of adjustment factor makes that identification unavailable.
+    This is not an exchange price-limit feed (historical ST/name changes, special
+    resumption rules and ex-right reference prices are not reconstructed).
+    """
+    limit, _ = _board(symbol, name)
+    # STAR/ChiNext risk-warning shares retain the board's 20% limit. Main-board
+    # ST shares remain excluded independently, including when their name changed.
+    code = "".join(character for character in str(symbol) if character.isdigit())
+    sse_main_st = ("ST" in str(name).upper() and code.startswith(("600", "601", "603", "605")))
+    if code.startswith(("688", "300", "301")):
+        limit = 0.20
+    elif sse_main_st and rows[-1]["date"] >= "2026-07-06":
+        limit = 0.10
+    scale = limit / 0.10
+    hard_returns = {3: 15 * scale, 5: 20 * scale, 10: 30 * scale}
+    warning_returns = {3: 8 * scale, 5: 12 * scale, 10: 20 * scale}
+    hard_deviation = 15 * scale
+    warning_deviation = 8 * scale
+    gap_ceiling = 2.0 if limit <= 0.10 else 3.0
+    ma_ceiling = 8.0 if limit <= 0.10 else 12.0
+    reasons = []
+
+    def add(code, severity, detail):
+        reasons.append({"code": code, "severity": severity, "detail": detail})
+
+    window = rows[-21:]
+    closes = [row["close"] for row in rows]
+    returns = {span: (closes[-1] / closes[-span - 1] - 1) * 100
+               if len(rows) > span else None for span in (3, 5, 10)}
+    ma20 = mean(closes[-20:])
+    deviation = (closes[-1] / ma20 - 1) * 100
+    raw = [_number(row.get("raw_close"), None) for row in window]
+    raw_complete = len(window) == 21 and all(value is not None and value > 0 for value in raw)
+    if len(rows) < 21:
+        add("insufficient_history", "insufficient", "少于21条完整日线，不能核验短期急涨、均线与涨停聚集。")
+    if not raw_complete:
+        add("raw_price_missing", "insufficient", "近21条未复权收盘价不完整；不把前复权涨幅当作已核实的涨停。")
+    if not _index(symbol) and _restricted(symbol, name):
+        add("restricted_security", "block", "当前名称含ST或退市标记，独立排除；不通过技术风险检查恢复入场。")
+    aligned = None
+    if benchmark:
+        expected = [row["date"] for row in benchmark if row["date"] <= rows[-1]["date"]][-21:]
+        aligned = len(expected) == 21 and expected == [row["date"] for row in window]
+        if not aligned:
+            add("session_gap", "insufficient", "近21条日线未与已提供基准的完整交易日连续对齐，不能把缺失日线当成相邻交易日。")
+    else:
+        add("calendar_unverified", "warning", "没有基准交易日日线，连续性尚未核验；仍须通过独立交易日与模型门槛。")
+    factor_break_dates = []
+    limit_dates, near_limit_dates = [], []
+    streak, recent_max_streak = 0, 0
+    recent_flags = []
+    if raw_complete:
+        factors = [price / row["close"] for price, row in zip(raw, window)]
+        for i in range(1, len(window)):
+            factor_break = abs(factors[i] / factors[i - 1] - 1) > 0.002
+            if factor_break:
+                factor_break_dates.append(window[i]["date"])
+            # Half-up tick rounding, rather than a blanket 9.8% threshold, also
+            # handles low-priced stocks without counting 10% as a STAR limit.
+            pair_limit = limit
+            if sse_main_st:
+                pair_limit = 0.05 if window[i]["date"] < "2026-07-06" else 0.10
+            upper = float((Decimal(str(raw[i - 1])) *
+                           (Decimal("1") + Decimal(str(pair_limit)))).quantize(
+                               Decimal("0.01"), rounding=ROUND_HALF_UP))
+            matched = not factor_break and abs(raw[i] - upper) <= 0.0051
+            near = not factor_break and raw[i] >= upper - max(0.01, raw[i - 1] * 0.003)
+            if matched:
+                limit_dates.append(window[i]["date"])
+            if near:
+                near_limit_dates.append(window[i]["date"])
+            streak = streak + 1 if matched else 0
+            if i >= len(window) - 5:
+                recent_flags.append(matched)
+                recent_max_streak = max(recent_max_streak, streak)
+        if factor_break_dates:
+            add("adjustment_reference_changed", "insufficient", "近21条原价/前复权比例发生变化，可能涉及除权或数据口径变化；未取得官方除权参考价，暂停涨停判定与新入场。")
+    last5_limits = sum(recent_flags)
+    if recent_max_streak >= 2:
+        add("recent_limit_streak", "block", f"最近5条日线触及至少{recent_max_streak}连板序列；回落一天也不立即解除观察。")
+    if last5_limits >= 3:
+        add("clustered_limit_ups", "block", f"最近5条日线有{last5_limits}次涨停形态，暂停追涨。")
+    if rows[-1]["date"] in limit_dates:
+        add("latest_limit_up", "block", "最新完整日线收于涨停参考价，不在下一交易日按追板思路新增买入研究。")
+    elif rows[-1]["date"] in near_limit_dates:
+        add("latest_near_limit", "warning", "最新完整日线接近涨停参考价，需防止高开追价。")
+    for span, value in returns.items():
+        if value is not None and value >= hard_returns[span]:
+            add(f"rapid_return_{span}d", "block", f"近{span}个已完成日线区间累计上涨{value:.2f}%，达到保守急涨门槛{hard_returns[span]:g}%。")
+        elif value is not None and value >= warning_returns[span]:
+            add(f"elevated_return_{span}d", "warning", f"近{span}个已完成日线区间累计上涨{value:.2f}%，短期涨幅偏快。")
+    if deviation >= hard_deviation:
+        add("ma20_overextended", "block", f"收盘高于20日均线{deviation:.2f}%，达到保守偏离门槛{hard_deviation:g}%。")
+    elif deviation >= warning_deviation:
+        add("ma20_elevated", "warning", f"收盘高于20日均线{deviation:.2f}%，只研究回落价格，不能追价。")
+    previous = rows[-2]["close"] if len(rows) >= 2 else None
+    change = (closes[-1] / previous - 1) * 100 if previous else None
+    gap = (rows[-1]["open"] / previous - 1) * 100 if previous else None
+    shadow = (rows[-1]["high"] - max(rows[-1]["open"], closes[-1])) / previous * 100 if previous else None
+    average_volume = mean(row["volume"] for row in rows[-21:-1]) if len(rows) >= 2 else 0
+    volume_ratio = rows[-1]["volume"] / average_volume if average_volume else None
+    if volume_ratio is None or average_volume <= 0 or rows[-1]["volume"] <= 0:
+        add("volume_unavailable", "insufficient", "最新或此前成交量缺失/无成交，不能通过量价风险核验。")
+    if gap is not None and gap >= gap_ceiling:
+        add("completed_bar_gap", "warning", f"最新完整日线跳空高开{gap:.2f}%；这是已收盘日的形态，不是待买交易日开盘价。")
+    heated = deviation >= warning_deviation or any(
+        value is not None and value >= warning_returns[span] for span, value in returns.items())
+    if gap is not None and gap >= 5 * scale and heated:
+        add("heated_gap", "block", "短期涨幅/均线偏离偏高并伴随大幅跳空，暂停新增追高研究。")
+    if shadow is not None and shadow >= 3 * scale:
+        if volume_ratio is not None and volume_ratio >= 2 and heated:
+            add("volume_upper_shadow", "block", "短期偏热且放量长上影，存在冲高回落风险。")
+        else:
+            add("upper_shadow", "warning", f"最新完整日线存在较长上影（昨收的{shadow:.2f}%），需核验抛压。")
+    if change is not None and volume_ratio is not None and change <= -5 * scale and volume_ratio >= 2.5:
+        add("heavy_volume_decline", "block", f"最新完整日线下跌{abs(change):.2f}%且放量{volume_ratio:.2f}倍，暂停接回落/抄底研究。")
+    latest_raw = raw[-1] if raw and raw[-1] is not None and raw[-1] > 0 else None
+    ceiling = None
+    if latest_raw is not None and raw_complete and not factor_break_dates and aligned is not False:
+        latest_ratio = latest_raw / closes[-1]
+        # Round down to the price tick so the displayed cap never exceeds it.
+        ceiling = math.floor(min(latest_raw * (1 + gap_ceiling / 100),
+                                 ma20 * latest_ratio * (1 + ma_ceiling / 100)) * 100 + 1e-8) / 100
+    blocked = any(reason["severity"] in {"block", "insufficient"} for reason in reasons)
+    status = ("insufficient" if any(reason["severity"] == "insufficient" for reason in reasons)
+              else "blocked" if blocked else "warning" if reasons else "clear")
+    return {
+        "version": CHASE_RISK_VERSION, "as_of_date": rows[-1]["date"],
+        "status": status, "blocked": blocked, "gate_passed": not blocked,
+        "reasons": reasons,
+        "thresholds": {"hard_return_pct": hard_returns, "warning_return_pct": warning_returns,
+                       "hard_ma20_deviation_pct": hard_deviation, "warning_ma20_deviation_pct": warning_deviation,
+                       "limit_cluster_window": 5, "max_streak_before_block": 2,
+                       "limit_count_before_block": 3, "heavy_volume_decline_pct": -5 * scale,
+                       "heavy_volume_decline_ratio": 2.5},
+        "metrics": {**{f"return_{span}d_pct": round(value, 3) if value is not None else None
+                       for span, value in returns.items()},
+                    "ma20_deviation_pct": round(deviation, 3), "limit_pct": limit * 100,
+                    "limit_up_dates": limit_dates, "near_limit_up_dates": near_limit_dates,
+                    "last5_limit_up_count": last5_limits, "recent_max_streak": recent_max_streak,
+                    "gap_pct": round(gap, 3) if gap is not None else None,
+                    "upper_shadow_pct": round(shadow, 3) if shadow is not None else None,
+                    "volume_ratio": round(volume_ratio, 3) if volume_ratio is not None else None,
+                    "raw_price_complete": raw_complete, "benchmark_aligned": aligned,
+                    "adjustment_reference_changed_dates": factor_break_dates},
+        "entry_ceiling": {"price": ceiling, "price_basis": "latest_raw_close_scaled_ma20",
+                          "reference_date": rows[-1]["date"], "max_gap_pct": gap_ceiling,
+                          "max_ma20_premium_pct": ma_ceiling, "requires_live_quote": True,
+                          "note": "仅为盘前最高入场研究上限，不是次日开盘预测、可成交价或买入指令；当日实时报价仍须复核。"},
+        "scope_note": "固定保守风险门槛，未经收益优化；涨停形态为普通板块规则近似，未重建历史ST身份/特殊复牌及除权参考价。通过本项仍须通过模型、公告、财务与交易日核验，不能保证避开下跌。",
+    }
+
+
 def _frame(rows, symbol, name, benchmark=None):
     if not rows:
         raise ValueError("没有有效日线数据，不能计算推荐分。")
@@ -122,7 +284,7 @@ def _frame(rows, symbol, name, benchmark=None):
     ]
     score = round(sum(factor["score"] for factor in factors), 1)
     eligible = len(rows) >= 120 and rows[-1]["volume"] > 0 and score >= 70 and not _restricted(symbol, name)
-    warnings = ["推荐分是公开规则评分，不是上涨概率；点位仅为收盘后研究参考，不能保证成交或收益。"]
+    warnings = ["技术规则分仅为公开规则诊断，不是推荐值或上涨概率；点位仅为收盘后研究参考，不能保证成交或收益。"]
     if len(rows) < 120:
         warnings.append(f"有效日线仅 {len(rows)} 条，至少120条才进入可选股票池。")
     if _index(symbol):
@@ -138,10 +300,25 @@ def _frame(rows, symbol, name, benchmark=None):
     if abs(change) > 25:
         warnings.append("单日价格变化异常，请先核对复权、除权或上市日期。")
         eligible = False
+    chase_risk = _chase_risk(rows, symbol, name, benchmark)
+    warnings.extend(reason["detail"] for reason in chase_risk["reasons"])
+    if chase_risk["blocked"]:
+        eligible = False
     # Preserve a nonzero range even for perfectly flat histories.
     unit = max(atr, close * 0.005, 0.01)
     low = max(0.01, min(close, ma5) - unit * 0.35)
     high = max(low + 0.01, min(close + unit * 0.15, max(close, ma5) + unit * 0.1))
+    raw_close = _number(rows[-1].get("raw_close"), close)
+    ratio = raw_close / close if raw_close > 0 else 1.0
+    ceiling = chase_risk["entry_ceiling"]["price"]
+    if eligible and ceiling is not None:
+        high = min(high, ceiling / ratio)
+        if high < low + 0.01:
+            detail = "原研究入场区间高于昨收/20日均线约束的价格上限，暂停新增追价研究。"
+            chase_risk["reasons"].append({"code": "entry_band_above_ceiling", "severity": "block", "detail": detail})
+            chase_risk.update(status="blocked", blocked=True, gate_passed=False)
+            warnings.append(detail)
+            eligible = False
     stop = max(0.01, low - unit * 1.5)
     target = high + 2 * (high - stop)
     position = min(10.0, 0.005 / ((high - stop) / high) * 100) if high > stop else 0.0
@@ -150,8 +327,6 @@ def _frame(rows, symbol, name, benchmark=None):
     signal = "重点观察" if score >= 75 else ("观察候选" if score >= 65 else ("中性观察" if score >= 45 else "谨慎回避"))
     if not eligible and not _index(symbol):
         signal = "暂不纳入"
-    raw_close = _number(rows[-1].get("raw_close"), close)
-    ratio = raw_close / close if raw_close > 0 else 1.0
     if rows[-1].get("raw_close") is None:
         warnings.append("缺少未复权收盘价；参考点位暂按最新前复权价格，交易前必须核对。")
     reasons = [factor["detail"] for factor in factors if factor["score"] >= factor["max"] * 0.7]
@@ -170,6 +345,7 @@ def _frame(rows, symbol, name, benchmark=None):
         "take_profit": round(target * ratio, 2) if eligible else None,
         "max_position_pct": round(position, 1), "reasons": reasons, "warnings": warnings,
         "eligible": eligible, "price_basis": "均线、ATR与close为前复权研究价；买入/止损/止盈点位按raw_close比例转换为最新未复权基准，交易前仍须核对实时报价",
+        "chase_risk": chase_risk, "levels_status": "research_only",
     }
 
 

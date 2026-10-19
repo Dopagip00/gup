@@ -47,7 +47,7 @@ def public_key(key):
 def clean_value(key, value):
     # Research timestamps survive; local watchlists, positions and settings do not.
     if key in ('last_success', 'last_completed') and isinstance(value, dict):
-        return {k: value[k] for k in ('target_date', 'finished_at', 'status', 'ok', 'failed', 'total', 'universe', 'model_version') if k in value}
+        return {k: value[k] for k in ('target_date', 'finished_at', 'status', 'ok', 'failed', 'total', 'universe', 'model_version', 'chase_policy_version') if k in value}
     return value
 
 
@@ -353,6 +353,67 @@ def short_term_refresh(core, target):
         module.refresh_fundamentals = original
 
 
+def current_morning_research(core, moment, target):
+    """Reuse a proved current morning report, never manufacture a new receipt.
+
+    The completion receipt alone is insufficient after a source upgrade: every
+    fresh active signal must also carry the current model and chase policy.
+    Failed/stale securities remain visible and are allowed only within the same
+    one-percent coverage tolerance used by daily publication.
+    """
+    receipt = core.getkv('last_completed', {})
+    forecast = getattr(core, 'forecast', None)
+    strategy = getattr(core, 'strategy', None)
+    version = getattr(forecast, 'MODEL_VERSION', None)
+    protocol = getattr(forecast, 'VALIDATION_PROTOCOL', None)
+    policy = getattr(strategy, 'CHASE_POLICY_VERSION', None)
+    if not (isinstance(receipt, dict) and version and protocol and policy
+            and receipt.get('target_date') == target
+            and receipt.get('status') in ('success', 'partial')
+            and receipt.get('model_version') == version
+            and receipt.get('chase_policy_version') == policy):
+        return None
+    try:
+        finished = dt.datetime.fromisoformat(receipt.get('finished_at', ''))
+        if finished.tzinfo is None:
+            return None
+        finished = finished.astimezone(TZ)
+        if not (finished.date() == moment.date() and dt.time(8) <= finished.time().replace(tzinfo=None)
+                < dt.time(9, 30) and finished <= moment):
+            return None
+        total, ok, failed = (receipt.get(key) for key in ('total', 'ok', 'failed'))
+        if not (type(total) is int and type(ok) is int and type(failed) is int
+                and total > 0 and 0 <= ok <= total and 0 <= failed <= total
+                and ok + failed == total and ok / total >= .99):
+            return None
+        with core.connect() as con:
+            rows = con.execute('''SELECT s.symbol,g.payload FROM securities s
+                LEFT JOIN signals g ON g.symbol=s.symbol AND g.report_date=?
+                WHERE s.active=1 AND s.symbol<>'sh000001' ORDER BY s.symbol''', (target,)).fetchall()
+        if len(rows) != total:
+            return None
+        fresh = 0
+        for symbol, raw in rows:
+            signal = json.loads(raw) if raw is not None else None
+            if not isinstance(signal, dict) or signal.get('stale') is True or signal.get('date') != target:
+                continue
+            prediction, chase = signal.get('prediction'), signal.get('chase_risk')
+            if not (signal.get('symbol') == symbol and isinstance(prediction, dict)
+                    and prediction.get('model_version') == version
+                    and prediction.get('validation_protocol') == protocol
+                    and prediction.get('as_of_date') == target
+                    and isinstance(chase, dict) and chase.get('version') == policy
+                    and chase.get('as_of_date') == target
+                    and signal.get('recompute_status') != 'error'):
+                return None
+            fresh += 1
+        return dict(receipt) if fresh >= ok and fresh / total >= .99 else None
+    except (TypeError, ValueError, sqlite3.Error):
+        # An unreadable/obsolete cache is recomputed within the collection
+        # window; it is never upgraded merely by assigning current labels.
+        return None
+
+
 def run_stage(stage, core, service):
     moment = core.now(); date = moment.date().isoformat()
     result = {'date': date, 'stage': stage, 'started_at': moment.isoformat(), 'mode': 'manual_research'}
@@ -363,9 +424,26 @@ def run_stage(stage, core, service):
     if stage == 'collect':
         if moment.time().replace(tzinfo=None) < dt.time(8):
             return dict(result, status='skipped', reason='尚未到北京时间08:00')
-        if moment.time().replace(tzinfo=None) >= dt.time(15, 20):
-            return dict(result, status='late_skipped', reason='采集启动已晚于当日收盘，不补造08点研究')
+        if moment.time().replace(tzinfo=None) >= dt.time(9, 30):
+            return dict(result, status='late_skipped', reason='已到北京时间09:30，不补造晨间采集或新买入建议')
+        if moment.time().replace(tzinfo=None) >= dt.time(9):
+            return dict(result, status='skipped', reason='已进入09点发布窗口，跳过耗时行情重算并保留原始采集记录')
+        cached = current_morning_research(core, moment, target)
+        if cached:
+            news_snapshot = core.getkv('morning_news', {})
+            result.update(status='cached', research=cached, research_cached=True,
+                          research_finished_at=cached['finished_at'], finished_at=core.now().isoformat(),
+                          news_status=news_snapshot.get('status') if isinstance(news_snapshot, dict) else None,
+                          message='复用同日已核验的行情、模型与追高规则；原研究完成时间保留，09点发布时另核最新资讯。')
+            core.putkv('github_collect', result)
+            return result
         news = collect_news(core)  # Sources and timestamps precede the long market download.
+        market_start = core.now()
+        if market_start.date() != moment.date() or market_start.time().replace(tzinfo=None) >= dt.time(9):
+            return dict(result, status='late_skipped' if market_start.date() != moment.date() or
+                        market_start.time().replace(tzinfo=None) >= dt.time(9, 30) else 'skipped',
+                        finished_at=market_start.isoformat(), news_status=news.get('status'),
+                        reason='资讯核验后已进入发布窗口，不再启动耗时行情重算；保留实际资讯时间与原研究记录')
         previous = core.getkv('last_success', {})
         if previous.get('target_date') == target:
             core.putkv('last_success', {})  # Re-run models on valid cached bars, not a forced re-download.

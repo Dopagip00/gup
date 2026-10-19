@@ -75,6 +75,40 @@ def quote_gate(result, quote, target):
     return result
 
 
+def chase_failures(stock, target):
+    risk = stock.get('chase_risk')
+    if not isinstance(risk, dict):
+        return ['缺少当前追高与急跌风险核验，暂停新推荐']
+    if (risk.get('version') != getattr(strategy, 'CHASE_POLICY_VERSION', 'anti-chase-v1') or
+            risk.get('as_of_date') != target or risk.get('blocked') is not False or
+            risk.get('gate_passed') is not True):
+        details = [r.get('detail') for r in risk.get('reasons', []) if isinstance(r, dict) and r.get('detail')]
+        return details or ['追高、急跌或数据完整性风险未通过，暂停新推荐']
+    ceiling = risk.get('entry_ceiling')
+    if (not isinstance(ceiling, dict) or ceiling.get('reference_date') != target or
+            ceiling.get('price_basis') != 'latest_raw_close_scaled_ma20' or
+            ceiling.get('requires_live_quote') is not True):
+        return ['入场上限日期或价格基准未核验，暂停新推荐']
+    price, high = ceiling.get('price'), stock.get('entry_high')
+    if (type(price) not in (int, float) or not math.isfinite(price) or price <= 0 or
+            type(high) not in (int, float) or not math.isfinite(high) or high > price + .005):
+        return ['研究买入区间无效或超出不追高入场上限，暂停新推荐']
+    return []
+
+
+def chase_gate(stock, target):
+    if stock.get('symbol') == 'sh000001':
+        return stock
+    failures = chase_failures(stock, target)
+    if not failures:
+        return stock
+    stock = dict(stock, eligible=False, max_position_pct=0, levels_status='research_only')
+    stock['warnings'] = list(dict.fromkeys(list(stock.get('warnings', [])) + failures))
+    for key in ('entry_low', 'entry_high', 'stop_loss', 'take_profit', 'research_levels'):
+        stock[key] = None
+    return stock
+
+
 def prediction_failures(prediction, target):
     """A saved eligibility flag cannot authorize a new recommendation by itself."""
     p = prediction if isinstance(prediction, dict) else {}
@@ -364,7 +398,7 @@ class Service:
             target = expected_date()
             cfg = config()
             previous = getkv('last_success', {})
-            if not force and previous.get('target_date') == target and previous.get('universe') == cfg['universe'] and previous.get('watchlist') == cfg['watchlist'] and previous.get('model_version') == getattr(forecast, 'MODEL_VERSION', None):
+            if not force and previous.get('target_date') == target and previous.get('universe') == cfg['universe'] and previous.get('watchlist') == cfg['watchlist'] and previous.get('model_version') == getattr(forecast, 'MODEL_VERSION', None) and previous.get('chase_policy_version') == getattr(strategy, 'CHASE_POLICY_VERSION', 'anti-chase-v1'):
                 self.status = {'status': 'idle', 'phase': '最近完整交易日已经更新'}
                 return self.status
             with connect() as con:
@@ -453,9 +487,9 @@ class Service:
             with connect() as con:
                 con.execute('UPDATE runs SET ended_at=?,status=?,error=? WHERE id=?', (end, status, error, run_id))
             # A partial refresh with suspended stocks is still retained as a completed report.
-            putkv('last_completed', {'target_date': target, 'finished_at': end, 'ok': ok, 'failed': failed, 'total': len(stocks), 'status': status, 'model_version': getattr(forecast, 'MODEL_VERSION', None)})
+            putkv('last_completed', {'target_date': target, 'finished_at': end, 'ok': ok, 'failed': failed, 'total': len(stocks), 'status': status, 'model_version': getattr(forecast, 'MODEL_VERSION', None), 'chase_policy_version': getattr(strategy, 'CHASE_POLICY_VERSION', 'anti-chase-v1')})
             if status == 'success':
-                putkv('last_success', {'target_date': target, 'finished_at': end, 'universe': cfg['universe'], 'watchlist': cfg['watchlist'], 'model_version': getattr(forecast, 'MODEL_VERSION', None)})
+                putkv('last_success', {'target_date': target, 'finished_at': end, 'universe': cfg['universe'], 'watchlist': cfg['watchlist'], 'model_version': getattr(forecast, 'MODEL_VERSION', None), 'chase_policy_version': getattr(strategy, 'CHASE_POLICY_VERSION', 'anti-chase-v1')})
             self.status = {'status': status, 'completed': ok+failed, 'total': len(stocks), 'ok': ok, 'failed': failed}
             try:
                 from research_refresh import refresh_fundamentals
@@ -503,7 +537,7 @@ class Service:
                 index = item
                 index['bars'] = [b for b in load_history('sh000001').get('bars', []) if b['date'] <= (report_date or '')][-180:]
             else:
-                item = prediction_gate(quote_gate(item, quotes.get(item['symbol']), target), target)
+                item = chase_gate(prediction_gate(quote_gate(item, quotes.get(item['symbol']), target), target), target)
                 stocks.append(item)
                 fresh += not item.get('stale', True)
         if not index or index.get('stale'):
@@ -576,7 +610,7 @@ class Service:
         result.update(excluded=bool(why), exclusion_reason=why)
         if why:
             result['eligible'] = False
-        result = prediction_gate(quote_gate(result, valuation, target), target)
+        result = chase_gate(prediction_gate(quote_gate(result, valuation, target), target), target)
         try:
             backtest = strategy.backtest_cycle(history['bars'], symbol, name=result.get('name', ''), excluded=bool(why))
             backtest_error = None

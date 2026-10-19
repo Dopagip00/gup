@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import datetime as dt
 import gzip
 import hashlib
@@ -49,6 +50,31 @@ class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
     def tearDown(self):self.temp.cleanup()
+
+    def current_cache(self, core):
+        core.forecast=types.SimpleNamespace(MODEL_VERSION='ridge-cycle-v2',VALIDATION_PROTOCOL='purged-expanding-3x60-v1')
+        core.strategy=types.SimpleNamespace(CHASE_POLICY_VERSION='anti-chase-v1')
+        core.database=self.root/'current.sqlite3';make_db(core.database)
+        receipt={'target_date':'2026-10-16','finished_at':'2026-10-19T08:12:00+08:00',
+            'status':'success','ok':100,'failed':0,'total':100,'model_version':'ridge-cycle-v2',
+            'chase_policy_version':'anti-chase-v1'}
+        core.putkv('last_completed',receipt)
+        core.putkv('last_success',dict(receipt))
+        with core.connect() as con:
+            for index in range(100):
+                symbol=f'sh{600000+index}'
+                signal={'symbol':symbol,'date':'2026-10-16','stale':False,
+                    'prediction':{'model_version':'ridge-cycle-v2','validation_protocol':'purged-expanding-3x60-v1','as_of_date':'2026-10-16'},
+                    'chase_risk':{'version':'anti-chase-v1','as_of_date':'2026-10-16'}}
+                con.execute('INSERT INTO securities VALUES(?,?,1)',(symbol,symbol))
+                con.execute('INSERT INTO signals VALUES(?,?,?)',('2026-10-16',symbol,json.dumps(signal)))
+        return receipt
+
+    def edit_signal(self, core, edit):
+        with core.connect() as con:
+            raw=con.execute("SELECT payload FROM signals WHERE symbol='sh600000'").fetchone()[0]
+            signal=json.loads(raw);edit(signal)
+            con.execute("UPDATE signals SET payload=? WHERE symbol='sh600000'",(json.dumps(signal),))
 
     def test_public_cache_contains_no_accounts_settings_or_deleted_private_bytes(self):
         source=self.root/'source.sqlite3';make_db(source)
@@ -128,6 +154,114 @@ class RunnerTests(unittest.TestCase):
         with patch.object(runner,'collect_news') as news:
             self.assertEqual(runner.run_stage('collect',core,service)['status'],'late_skipped')
             news.assert_not_called();service.refresh.assert_not_called()
+
+    def test_collection_starts_market_work_only_between_eight_and_nine(self):
+        for hour,minute,second,expected in ((7,59,59,'skipped'),(8,0,0,'partial'),
+                (8,59,59,'partial'),(9,0,0,'skipped'),(9,29,59,'skipped'),
+                (9,30,0,'late_skipped'),(16,0,0,'late_skipped')):
+            with self.subTest(time=(hour,minute,second)):
+                core=FakeCore(dt.datetime(2026,10,19,hour,minute,second,tzinfo=runner.TZ))
+                previous={'target_date':'2026-10-16','finished_at':'2026-10-16T16:00:00+08:00'}
+                core.putkv('last_completed',dict(previous));core.putkv('last_success',dict(previous))
+                service=Mock();service.status={'status':'partial'}
+                with patch.object(runner,'collect_news',return_value={'status':'verified'}) as news,patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()):
+                    result=runner.run_stage('collect',core,service)
+                self.assertEqual(result['status'],expected)
+                self.assertEqual(service.refresh.call_count,int(expected=='partial'))
+                self.assertEqual(news.call_count,int(expected=='partial'))
+                self.assertEqual(core.getkv('last_completed'),previous)
+                self.assertEqual(core.getkv('last_success'),previous)
+
+    def test_news_crossing_nine_does_not_start_a_long_market_refresh(self):
+        for finished,expected in ((dt.datetime(2026,10,19,9,tzinfo=runner.TZ),'skipped'),
+                                 (dt.datetime(2026,10,19,9,30,tzinfo=runner.TZ),'late_skipped')):
+            core=FakeCore();core.now=Mock(side_effect=[dt.datetime(2026,10,19,8,59,tzinfo=runner.TZ),finished])
+            service=Mock();previous={'finished_at':'2026-10-16T16:00:00+08:00'}
+            core.putkv('last_completed',previous)
+            with patch.object(runner,'collect_news',return_value={'status':'verified'}) as news,patch.object(runner,'short_term_refresh') as short:
+                result=runner.run_stage('collect',core,service)
+            self.assertEqual(result['status'],expected);self.assertEqual(result['finished_at'],finished.isoformat())
+            service.refresh.assert_not_called();short.assert_not_called();news.assert_called_once()
+            self.assertEqual(core.getkv('last_completed'),previous)
+
+    def test_recovery_reuses_current_morning_models_without_rewriting_research_time(self):
+        core=FakeCore();receipt=self.current_cache(core);original=copy.deepcopy(core.values);service=Mock()
+        with patch.object(runner,'collect_news') as news,patch.object(runner,'short_term_refresh') as short:
+            first=runner.run_stage('collect',core,service)
+            second=runner.run_stage('collect',core,service)
+        self.assertEqual(first['status'],'cached');self.assertEqual(second['status'],'cached')
+        self.assertEqual(first['research_finished_at'],'2026-10-19T08:12:00+08:00')
+        self.assertEqual(first['research'],receipt)
+        self.assertEqual(first['finished_at'],'2026-10-19T08:30:00+08:00')
+        self.assertEqual(core.getkv('last_completed'),original['last_completed'])
+        self.assertEqual(core.getkv('last_success'),original['last_success'])
+        news.assert_not_called();short.assert_not_called();service.refresh.assert_not_called()
+
+    def test_old_incomplete_or_future_receipts_cannot_be_relabelled_as_morning_cache(self):
+        core=FakeCore();original=self.current_cache(core)
+        mutations=[{'finished_at':'2026-10-16T08:12:00+08:00'},
+            {'finished_at':'2026-10-19T07:59:59+08:00'},
+            {'finished_at':'2026-10-19T08:31:00+08:00'},
+            {'finished_at':'2026-10-19T08:12:00'},
+            {'target_date':'2026-10-15'},{'model_version':'ridge-cycle-v1'},
+            {'chase_policy_version':None},{'chase_policy_version':'old-policy'},
+            {'ok':98,'failed':2},{'ok':99,'failed':0},{'total':float('inf')},
+            {'status':'running'}]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                core.putkv('last_completed',dict(original,**mutation))
+                self.assertIsNone(runner.current_morning_research(core,core.now(),'2026-10-16'))
+
+    def test_any_fresh_signal_with_an_old_policy_or_prediction_forces_recalculation(self):
+        core=FakeCore();self.current_cache(core)
+        with core.connect() as con:
+            original=con.execute("SELECT payload FROM signals WHERE symbol='sh600000'").fetchone()[0]
+        edits=[lambda s:s['chase_risk'].update(version='old-policy'),
+            lambda s:s.pop('chase_risk'),
+            lambda s:s['chase_risk'].update(as_of_date='2026-10-15'),
+            lambda s:s['prediction'].update(model_version='ridge-cycle-v1'),
+            lambda s:s['prediction'].update(as_of_date='2026-10-15'),
+            lambda s:s.update(recompute_status='error')]
+        for index,edit in enumerate(edits):
+            with self.subTest(edit=index):
+                with core.connect() as con:con.execute("UPDATE signals SET payload=? WHERE symbol='sh600000'",(original,))
+                self.edit_signal(core,edit)
+                self.assertIsNone(runner.current_morning_research(core,core.now(),'2026-10-16'))
+
+    def test_partial_report_at_exact_ninety_nine_percent_can_be_reused(self):
+        core=FakeCore();receipt=self.current_cache(core)
+        core.putkv('last_completed',dict(receipt,status='partial',ok=99,failed=1))
+        self.edit_signal(core,lambda signal:signal.update(stale=True,date='2026-10-15'))
+        self.assertIsNotNone(runner.current_morning_research(core,core.now(),'2026-10-16'))
+        with core.connect() as con:con.execute("DELETE FROM signals WHERE symbol='sh600001'")
+        self.assertIsNone(runner.current_morning_research(core,core.now(),'2026-10-16'))
+
+    def test_old_policy_receipt_recomputes_once_even_when_bars_and_model_version_match(self):
+        core=FakeCore();receipt=self.current_cache(core);receipt.pop('chase_policy_version')
+        service=Mock();service.status={'status':'success'}
+        def refresh(force):
+            core.putkv('last_completed',dict(receipt,chase_policy_version='anti-chase-v1'))
+            core.putkv('last_success',dict(receipt,chase_policy_version='anti-chase-v1'))
+        service.refresh.side_effect=refresh
+        with patch.object(runner,'collect_news',return_value={'status':'verified'}) as news,patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()):
+            self.assertEqual(runner.run_stage('collect',core,service)['status'],'success')
+            self.assertEqual(runner.run_stage('collect',core,service)['status'],'cached')
+        service.refresh.assert_called_once_with(force=False);news.assert_called_once()
+
+    def test_slow_market_completion_keeps_its_actual_late_time(self):
+        core=FakeCore(dt.datetime(2026,10,19,8,59,tzinfo=runner.TZ));service=Mock();service.status={'status':'partial'}
+        late=dt.datetime(2026,10,19,9,45,tzinfo=runner.TZ)
+        def refresh(force):core.now=lambda:late
+        service.refresh.side_effect=refresh
+        with patch.object(runner,'collect_news',return_value={'status':'verified'}),patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()):
+            result=runner.run_stage('collect',core,service)
+        self.assertEqual(result['finished_at'],late.isoformat())
+        self.assertNotIn('research_cached',result)
+
+    def test_public_completion_receipt_retains_policy_without_private_settings(self):
+        value={'target_date':'2026-10-16','chase_policy_version':'anti-chase-v1','watchlist':'PRIVATE'}
+        self.assertEqual(runner.clean_value('last_completed',value),
+            {'target_date':'2026-10-16','chase_policy_version':'anti-chase-v1'})
 
     def test_publish_rechecks_current_news_before_selection_but_late_recovery_does_not(self):
         for hour,minute,recheck in ((9,0,True),(9,29,True),(9,30,False),(16,0,False)):

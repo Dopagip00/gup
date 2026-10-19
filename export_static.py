@@ -18,7 +18,7 @@ META_KEYS = {'app_name','now','status','last_success','data_date','report_date',
 def public_dashboard(value):
     result = {key: copy.deepcopy(value.get(key)) for key in ('index','stocks')}
     table_keys = {'symbol','name','date','close','raw_close','change_pct','score','eligible','excluded',
-                  'exclusion_reason','stale','signal','entry_low','entry_high','stop_loss','take_profit','research_levels'}
+                  'exclusion_reason','stale','signal','entry_low','entry_high','stop_loss','take_profit','research_levels','levels_status','chase_risk'}
     prediction_keys = {'available','eligible','horizon_days','horizon','return_basis','return_definition',
                        'expected_return_pct','interval_low_pct','interval_high_pct','validation_mae_pct',
                        'validation_samples','rank_value','raw_rank_value','model_version','validation_protocol',
@@ -46,6 +46,7 @@ def export_site(output_dir, service, engine_dir=None):
     import forecast_audit
     output = Path(output_dir).resolve()
     engine = Path(engine_dir or core.BASE).resolve()
+    version = json.loads((engine/'version.json').read_text(encoding='utf-8'))
     output.mkdir(parents=True, exist_ok=True)
     def write(name, value):
         target = output / name
@@ -56,6 +57,8 @@ def export_site(output_dir, service, engine_dir=None):
         'src="./app.js"').replace('<script defer src="./app.js"></script>',
         '<script defer src="./pages.js"></script>\n  <script defer src="./app.js"></script>')
     html = html.replace('href="/api/migration-guide"','href="./MIGRATION.md"')
+    for asset in ('app.js', 'pages.js', 'styles.css'):
+        html = html.replace(f'="./{asset}"', f'="./{asset}?v={version["version"]}"')
     html = html.replace('一次成功的数据更新后，报告将自动保留在本地。','交易日研究快照由云端任务保存并发布。')
     html = html.replace('设置研究范围与数据获取频率。','全部沪市 A 股研究；网站显示云端生成的静态快照。')
     html = html.replace('盘中行情刷新间隔（分钟）','本地版本行情间隔（网站无盘中行情）')
@@ -86,7 +89,6 @@ def export_site(output_dir, service, engine_dir=None):
     write('data/longterm.json',service.longterm())
     write('data/quotes.json',{'quotes':[], 'status':'GitHub Pages 为收盘研究快照，不提供实时或盘中自动报价。'})
     write('data/config.json',{'hosted':True,'universe':'shanghai','watchlist':[],'refresh_minutes':5})
-    version = json.loads((engine/'version.json').read_text(encoding='utf-8'))
     write('data/system.json',{'version':version,'hosted':True,'project_path':'GitHub / Dopagip00/gup',
         'migration':{'message':'新电脑下载仓库即可继续开发；本机研究数据请使用完整迁移包。云端最近研究状态在 Actions artifact，公开快照在本网站。',
                      'backup_command':'git clone https://github.com/Dopagip00/gup.git'}})
@@ -115,6 +117,7 @@ def export_site(output_dir, service, engine_dir=None):
     status=core.getkv('github_run_status',{})
     write('data/run-status.json',status)
     result={'generated_at':core.now().isoformat(),'data_date':dashboard['meta'].get('data_date'),
+            'snapshot_schema_version':1,'app_version':version['version'],'data_schema_version':version['data_schema_version'],
             'stock_files':count,'reports':len(reports),'privacy':'public-market-research-only',
             'repository':'Dopagip00/gup','run':status}
     write('data/manifest.json',result)

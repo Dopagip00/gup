@@ -49,7 +49,7 @@ def _morning_ready(moment, target, research, news):
     finished, fetched = _instant(research.get('finished_at')), _instant(news.get('as_of') or news.get('fetched_at'))
     if not (research.get('target_date') == target and finished and start <= finished < end and finished <= moment):
         return False
-    if research.get('model_version') != core.forecast.MODEL_VERSION:
+    if research.get('model_version') != core.forecast.MODEL_VERSION or research.get('chase_policy_version') != getattr(core.strategy, 'CHASE_POLICY_VERSION', 'anti-chase-v1'):
         return False
     if not (news.get('date') == date and news.get('status') == 'verified' and fetched and start <= fetched < end and fetched <= moment):
         return False
@@ -171,6 +171,7 @@ def publish(date=None):
     risks = {r.get('symbol') for r in risk_exclusions if isinstance(r, dict)}
     candidates = [s for s in stocks if s.get('date') == target and s.get('eligible') is True and
         not core.prediction_failures(s.get('prediction'), target) and not s.get('stale') and
+        not core.chase_failures(s, target) and
         not s.get('excluded') and s.get('symbol') not in risks and
         all(_positive(s.get(key)) for key in ('entry_low', 'entry_high', 'stop_loss', 'take_profit', 'raw_close')) and
         s['stop_loss'] < s['entry_low'] <= s['entry_high'] < s['take_profit']]
@@ -178,6 +179,9 @@ def publish(date=None):
     pick = candidates[0] if allow_buy and ready and complete and candidates else None
     sell_date = session_after(date) if allow_buy and ready and complete else None
     buy = dict(pick,stock=pick,recommended_date=date,sell_date=sell_date) if pick else None
+    if buy:
+        ceiling = pick['chase_risk']['entry_ceiling']['price']
+        buy['entry_rule'] = f'D1实际开盘价或下单前报价高于{ceiling:.2f}元时放弃，不追价；低于上限也须本人核对是否仍在原研究区间。09:00无法预先核验开盘价。'
     import forecast_audit
     qualified_symbols = {s.get('symbol') for s in candidates}
     research_forecasts = forecast_audit.snapshot(
@@ -200,11 +204,36 @@ def publish(date=None):
         warnings.append('本次生成已晚于09:30，不补造盘前买入建议；仅保留真实发布时间及前日建议跟踪。')
     if not ready:
         warnings.append('当日08:00行情任务或有来源的资讯核验未完成，暂停新买入推荐。')
-    plan = {'date':date,'status':'published','published_at':moment.isoformat(),'buy':buy,'sell':prior,
+    pending = allow_buy and not (ready and complete)
+    plan = {'date':date,'status':'pending' if pending else 'published',
+            'attempted_at':moment.isoformat(),'published_at':None if pending else moment.isoformat(),'buy':buy,'sell':prior,
             'research_forecasts':research_forecasts,
             'news':news.get('items',[]),'news_status':news.get('status','unavailable'),'risk_exclusions':risk_exclusions,
             'news_verification': {key: news.get(key) for key in ('verification_scope','window_start','window_end','items_scanned','items_displayed','sources','session_risks')},
             'timezone':'Asia/Shanghai','mode':'manual_research','data_date':target,'coverage':coverage,'morning_ready':ready,'research_status':research_status,'late':not allow_buy,'warnings':warnings,
-            'message':'手动决策；当日买入最早下一交易日卖出。' if buy else '已错过盘前发布窗口，今日不补造买入建议。' if not allow_buy else '资讯或行情收集未完成，今日暂无可用买入建议。' if not ready else '没有同时通过数据、规则和预测验证的买入候选，今日不强行推荐。'}
-    core.putkv('daily_plan:'+date,plan)
+            'message':'手动决策；当日买入最早下一交易日卖出。' if buy else '已错过盘前发布窗口，今日不补造买入建议。' if not allow_buy else '盘前研究尚未就绪，等待补偿任务重试；暂不提供买入建议。' if pending else '没有同时通过数据、规则和预测验证的买入候选，今日不强行推荐。'}
+    # Acquire the writer lock before measuring the actual record time. A slow
+    # dashboard read or a busy SQLite writer must not retain an earlier clock.
+    with core.connect() as con:
+        con.execute('BEGIN IMMEDIATE')
+        saved = con.execute('SELECT value FROM kv WHERE key=?', ('daily_plan:'+date,)).fetchone()
+        if saved:
+            original = json.loads(saved[0])
+            if isinstance(original, dict) and original.get('status') == 'published':
+                return original
+        recorded = core.now().astimezone(core.TZ)
+        if recorded.date().isoformat() != date:
+            raise ValueError('研究生成期间日期已变化，禁止补造前一日发布')
+        if recorded.time().replace(tzinfo=None) >= dt.time(9, 30):
+            plan.update(status='published', published_at=recorded.isoformat(), buy=None,
+                        research_forecasts=[], late=True,
+                        message='已错过盘前发布窗口，今日不补造买入建议。')
+            if not any('晚于09:30' in warning for warning in plan['warnings']):
+                plan['warnings'].append('实际记录生成已晚于09:30，不补造盘前买入建议；保留前日建议跟踪。')
+        elif plan['status'] == 'published':
+            plan['published_at'] = recorded.isoformat()
+            for captured in plan['research_forecasts']:
+                captured['published_at'] = recorded.isoformat()
+        plan['recorded_at'] = recorded.isoformat()
+        con.execute('INSERT OR REPLACE INTO kv VALUES(?,?)', ('daily_plan:'+date,core.encode(plan)))
     return plan

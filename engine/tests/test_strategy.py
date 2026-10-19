@@ -13,7 +13,7 @@ def history(count=140, change=0.01):
         close = 10 + change * i + (0.08 if i % 3 == 0 else 0)
         rows.append({"date": str(start + timedelta(days=i)), "open": close,
                      "high": close + 0.1, "low": close - 0.1,
-                     "close": close, "volume": 100000 + (i % 4) * 10000})
+                     "close": close, "raw_close": close, "volume": 100000 + (i % 4) * 10000})
     return rows
 
 
@@ -36,7 +36,10 @@ class StrategyTests(unittest.TestCase):
         self.assertLess(result["stop_loss"], result["entry_low"])
         self.assertLessEqual(result["entry_low"], result["entry_high"])
         self.assertGreater(result["take_profit"], result["entry_high"])
-        rows[-1]["raw_close"] = rows[-1]["close"] * 1.5
+        # A common adjustment factor is a valid basis conversion. Changing
+        # only the latest factor instead is now an explicit data-risk veto.
+        for row in rows:
+            row["raw_close"] = row["close"] * 1.5
         raw = strategy.analyze(rows, "sh600000", "测试")
         for key in ("entry_low", "entry_high", "stop_loss", "take_profit"):
             self.assertAlmostEqual(raw[key], result[key] * 1.5, delta=0.015)
@@ -158,6 +161,147 @@ class StrategyTests(unittest.TestCase):
             strategy.backtest(history(30), "sh600000")
         with self.assertRaises(ValueError):
             strategy.backtest(history(), "sh600000", initial_cash=-1)
+
+    def risk_history(self, final_closes=None, count=140):
+        rows = history(count)
+        for row in rows:
+            row.update(open=10, high=10.1, low=9.9, close=10, raw_close=10, volume=10000)
+        if final_closes:
+            for row, close in zip(rows[-len(final_closes):], final_closes):
+                row.update(open=close, high=close + .1, low=close - .1,
+                           close=close, raw_close=close)
+        return rows
+
+    def risk(self, rows, symbol="sh600298", name="测试", benchmark=None):
+        return strategy.analyze(rows, symbol, name, benchmark)["chase_risk"]
+
+    def risk_codes(self, result):
+        return {item["code"] for item in result["reasons"]}
+
+    def test_two_limits_remain_blocked_after_one_down_session(self):
+        rows = self.risk_history([11, 12.10, 11.50])
+        result = strategy.analyze(rows, "sh600298", "测试")
+        risk = result["chase_risk"]
+        self.assertIn("recent_limit_streak", self.risk_codes(risk))
+        self.assertEqual(risk["metrics"]["recent_max_streak"], 2)
+        self.assertEqual(risk["metrics"]["last5_limit_up_count"], 2)
+        self.assertTrue(risk["blocked"])
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["max_position_pct"], 0)
+        for key in ("entry_low", "entry_high", "stop_loss", "take_profit"):
+            self.assertIsNone(result[key])
+
+    def test_recent_streak_endpoint_in_first_of_last_five_is_still_seen(self):
+        rows = self.risk_history([11, 12.10, 11.5, 11.4, 11.3, 11.2])
+        risk = self.risk(rows)
+        self.assertEqual(risk["metrics"]["last5_limit_up_count"], 1)
+        self.assertIn("recent_limit_streak", self.risk_codes(risk))
+
+    def test_nonconsecutive_cluster_of_three_limits_is_blocked(self):
+        rows = self.risk_history([11, 10, 11, 10, 11])
+        risk = self.risk(rows)
+        self.assertEqual(risk["metrics"]["last5_limit_up_count"], 3)
+        self.assertIn("clustered_limit_ups", self.risk_codes(risk))
+
+    def test_board_limits_and_tick_rounding_are_distinguished(self):
+        ten = self.risk_history([11])
+        self.assertEqual(self.risk(ten)["metrics"]["last5_limit_up_count"], 1)
+        self.assertEqual(self.risk(ten, "sh688001")["metrics"]["last5_limit_up_count"], 0)
+        twenty = self.risk_history([12])
+        self.assertEqual(self.risk(twenty, "sh688001")["metrics"]["last5_limit_up_count"], 1)
+        low = self.risk_history()
+        for row in low:
+            row.update(open=1.01, high=1.02, low=1, close=1.01, raw_close=1.01)
+        low[-1].update(open=1.11, high=1.11, low=1.1, close=1.11, raw_close=1.11)
+        self.assertEqual(self.risk(low)["metrics"]["last5_limit_up_count"], 1)
+        low[-1].update(open=1.10, high=1.11, low=1.09, close=1.10, raw_close=1.10)
+        self.assertEqual(self.risk(low)["metrics"]["last5_limit_up_count"], 0)
+
+    def test_main_board_st_historical_five_and_current_ten_both_excluded(self):
+        old = self.risk_history([10.50])  # Synthetic date is in 2025.
+        old_risk = self.risk(old, "sh600298", "ST测试")
+        self.assertEqual(old_risk["metrics"]["limit_pct"], 5)
+        self.assertEqual(old_risk["metrics"]["last5_limit_up_count"], 1)
+        self.assertIn("restricted_security", self.risk_codes(old_risk))
+        new = self.risk_history([11])
+        for i, row in enumerate(new):
+            row["date"] = str(date(2026, 7, 6) + timedelta(days=i))
+        new_risk = self.risk(new, "sh600298", "*ST测试")
+        self.assertEqual(new_risk["metrics"]["limit_pct"], 10)
+        self.assertEqual(new_risk["metrics"]["last5_limit_up_count"], 1)
+        self.assertFalse(new_risk["gate_passed"])
+        star_risk = self.risk(self.risk_history([12]), "sh688001", "ST测试")
+        self.assertEqual(star_risk["metrics"]["limit_pct"], 20)
+        self.assertEqual(star_risk["metrics"]["last5_limit_up_count"], 1)
+
+    def test_adjustment_factor_break_is_not_counted_as_confirmed_limit(self):
+        rows = self.risk_history()
+        rows[-1]["raw_close"] = 11  # qfq remains flat: may be reference change.
+        risk = self.risk(rows)
+        self.assertEqual(risk["metrics"]["last5_limit_up_count"], 0)
+        self.assertIn("adjustment_reference_changed", self.risk_codes(risk))
+        self.assertEqual(risk["status"], "insufficient")
+        self.assertIsNone(risk["entry_ceiling"]["price"])
+
+    def test_missing_raw_and_known_session_gap_fail_closed(self):
+        rows = history()
+        rows[-7].pop("raw_close")
+        self.assertIn("raw_price_missing", self.risk_codes(self.risk(rows)))
+        complete = history()
+        benchmark = [dict(row) for row in complete]
+        del complete[-5]
+        risk = self.risk(complete, benchmark=benchmark)
+        self.assertFalse(risk["metrics"]["benchmark_aligned"])
+        self.assertIn("session_gap", self.risk_codes(risk))
+        self.assertIsNone(risk["entry_ceiling"]["price"])
+
+    def test_future_benchmark_does_not_change_risk_or_input(self):
+        rows = history()
+        benchmark = history(150)
+        before = [dict(row) for row in rows]
+        self.assertEqual(self.risk(rows, benchmark=benchmark), self.risk(rows, benchmark=benchmark[:140]))
+        self.assertEqual(rows, before)
+
+    def test_single_elevated_move_warns_without_upgrading_low_score(self):
+        rows = self.risk_history([10.8])
+        risk = self.risk(rows)
+        self.assertIn("elevated_return_3d", self.risk_codes(risk))
+        self.assertNotIn("rapid_return_3d", self.risk_codes(risk))
+        flat = strategy.analyze(self.risk_history(), "sh600298", "测试")
+        self.assertTrue(flat["chase_risk"]["gate_passed"])
+        self.assertFalse(flat["eligible"])
+
+    def test_rapid_rise_ma_extension_and_heavy_volume_decline_block(self):
+        rise = self.risk(self.risk_history([10.4, 11, 11.6]))
+        self.assertIn("rapid_return_3d", self.risk_codes(rise))
+        extension = self.risk(self.risk_history([12] * 3))
+        self.assertIn("ma20_overextended", self.risk_codes(extension))
+        falling = self.risk_history([8.5])
+        falling[-1].update(open=10, high=10.1, low=8.4, volume=40000)
+        decline = self.risk(falling, "sh688001")
+        self.assertIn("heavy_volume_decline", self.risk_codes(decline))
+        self.assertNotIn("recent_limit_streak", self.risk_codes(decline))
+
+    def test_completed_gap_and_hot_volume_upper_shadow_are_explained(self):
+        rows = self.risk_history([10.9])
+        rows[-1].update(open=10.7, high=11.5, low=10.6, volume=25000)
+        risk = self.risk(rows)
+        self.assertIn("heated_gap", self.risk_codes(risk))
+        self.assertIn("volume_upper_shadow", self.risk_codes(risk))
+        self.assertIn("不是待买交易日开盘价", next(item["detail"] for item in risk["reasons"] if item["code"] == "completed_bar_gap"))
+
+    def test_entry_ceiling_uses_only_last_raw_close_and_ma20(self):
+        rows = history()
+        result = strategy.analyze(rows, "sh600298", "测试", rows)
+        risk = result["chase_risk"]
+        ceiling = risk["entry_ceiling"]
+        self.assertEqual(ceiling["reference_date"], rows[-1]["date"])
+        self.assertTrue(ceiling["requires_live_quote"])
+        self.assertLessEqual(ceiling["price"], rows[-1]["raw_close"] * 1.02)
+        self.assertLessEqual(ceiling["price"], sum(row["close"] for row in rows[-20:]) / 20 * 1.08)
+        self.assertTrue(result["eligible"])
+        self.assertLessEqual(result["entry_high"], ceiling["price"])
+        self.assertLess(result["stop_loss"], result["entry_low"])
 
     def cycle_history(self, count=130):
         rows = history(count)

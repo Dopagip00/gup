@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import strategy
 
 
 class RefreshConflict(RuntimeError):
@@ -26,6 +27,9 @@ def _current(signal, date, version, protocol):
                 and prediction.get('as_of_date') == date
                 and prediction.get('model_version') == version
                 and prediction.get('validation_protocol') == protocol
+                and isinstance(signal.get('chase_risk'), dict)
+                and signal['chase_risk'].get('version') == getattr(strategy, 'CHASE_POLICY_VERSION', 'anti-chase-v1')
+                and signal['chase_risk'].get('as_of_date') == date
                 and signal.get('recompute_status') != 'error')
 
 
@@ -83,6 +87,7 @@ def refresh_cached_predictions(core, target=None):
     protocol = core.forecast.VALIDATION_PROTOCOL
     receipt = {'status': 'noop', 'mode': 'cached_model_recompute',
                'model_version': version, 'validation_protocol': protocol,
+               'chase_policy_version': getattr(strategy, 'CHASE_POLICY_VERSION', 'anti-chase-v1'),
                'started_at': started, 'report_date': None, 'target_date': None,
                'total': 0, 'active_total': 0, 'missing_signal_count': 0,
                'current': 0, 'attempted': 0, 'ok': 0, 'failed': 0,

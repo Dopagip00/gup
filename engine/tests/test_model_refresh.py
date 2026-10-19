@@ -71,6 +71,7 @@ class ModelRefreshTests(unittest.TestCase):
         self.assertTrue(all(bar['date'] <= DATE for bar in bars))
         self.assertTrue(all(bar['date'] <= DATE for bar in benchmark_bars))
         return {'symbol': symbol, 'name': name, 'date': bars[-1]['date'], 'eligible': True,
+                'chase_risk':{'version':'anti-chase-v1','as_of_date':bars[-1]['date']},
                 'entry_low': 9, 'entry_high': 9.1, 'stop_loss': 8, 'take_profit': 12, 'warnings': []}
 
     def enrichment(self, result, bars, benchmark):
@@ -104,6 +105,15 @@ class ModelRefreshTests(unittest.TestCase):
         self.assertEqual((receipt['status'], receipt['current'], receipt['attempted']), ('noop', 2, 0))
         self.analyze.assert_not_called()
         self.assertEqual(self.snapshot('signals'), saved)
+
+    def test_old_or_missing_chase_policy_requires_recompute_even_with_current_point_model(self):
+        model_refresh.refresh_cached_predictions(core)
+        signal=self.read('sh600001');signal.pop('chase_risk')
+        with core.connect() as con:
+            con.execute('UPDATE signals SET payload=? WHERE report_date=? AND symbol=?',(core.encode(signal),DATE,'sh600001'))
+        receipt=model_refresh.refresh_cached_predictions(core)
+        self.assertEqual((receipt['current'],receipt['attempted'],receipt['ok']),(1,1,1))
+        self.assertEqual(self.read('sh600001')['chase_risk']['version'],'anti-chase-v1')
 
     def test_wrong_original_or_prediction_date_is_recomputed(self):
         model_refresh.refresh_cached_predictions(core)

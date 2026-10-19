@@ -80,6 +80,18 @@ class PlatformTests(unittest.TestCase):
         result=core.quote_gate(stock,quote,stock['date'])
         self.assertFalse(result['eligible']);self.assertFalse(result['quote_valid'])
 
+    def test_chase_gate_rejects_old_policy_or_bands_above_ceiling_without_mutating_source(self):
+        stock=self.candidate()
+        self.assertFalse(core.chase_gate(stock,stock['date'])['eligible'])
+        risk={'version':'anti-chase-v1','as_of_date':stock['date'],'blocked':False,'gate_passed':True,
+              'entry_ceiling':{'reference_date':stock['date'],'price_basis':'latest_raw_close_scaled_ma20','requires_live_quote':True,'price':10.03}}
+        stock['chase_risk']=risk
+        self.assertTrue(core.chase_gate(stock,stock['date'])['eligible'])
+        risk['entry_ceiling']['price']=10
+        rejected=core.chase_gate(stock,stock['date'])
+        self.assertFalse(rejected['eligible']);self.assertIsNone(rejected['entry_high'])
+        self.assertEqual(stock['entry_high'],10.02)
+
     def test_old_prediction_cache_cannot_authorize_new_recommendation(self):
         stock=self.candidate(); original=dict(stock['prediction'])
         result=core.prediction_gate(stock,stock['date'])

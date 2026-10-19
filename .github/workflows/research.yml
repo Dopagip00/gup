@@ -12,9 +12,15 @@ on:
       - 'seed/**'
       - 'tests/**'
   schedule:
-    # GitHub cron uses UTC: these are 08:00 and 09:00 Asia/Shanghai.
+    # UTC. The original 08:00 collection / 09:00 publication remain the targets.
+    # A few off-hour retries share the same pre-market window; actual Beijing
+    # time and the official SSE calendar remain authoritative inside the runner.
     - cron: '0 0 * * 1-5'
+    - cron: '17 0 * * 1-5'
+    - cron: '43 0 * * 1-5'
     - cron: '0 1 * * 1-5'
+    - cron: '7 1 * * 1-5'
+    - cron: '17 1 * * 1-5'
   workflow_dispatch:
     inputs:
       stage:
@@ -42,11 +48,36 @@ jobs:
       actions: read
     outputs:
       site_ready: ${{ steps.research.outputs.site_ready }}
+      stage: ${{ steps.stage.outputs.stage }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Resolve the authorized research stage explicitly
+        id: stage
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          REQUESTED_STAGE: ${{ github.event.inputs.stage }}
+        shell: bash
+        run: |
+          case "$EVENT_NAME" in
+            schedule)
+              case "$SCHEDULE" in
+                '0 0 * * 1-5'|'17 0 * * 1-5'|'43 0 * * 1-5') stage=collect ;;
+                '0 1 * * 1-5'|'7 1 * * 1-5'|'17 1 * * 1-5') stage=publish ;;
+                *) echo '::error::Unrecognized research schedule'; exit 1 ;;
+              esac ;;
+            workflow_dispatch)
+              case "$REQUESTED_STAGE" in
+                collect|publish|fundamentals) stage="$REQUESTED_STAGE" ;;
+                *) echo '::error::Unrecognized manual research stage'; exit 1 ;;
+              esac ;;
+            push) stage=publish ;;
+            *) echo '::error::Unrecognized research event'; exit 1 ;;
+          esac
+          echo "stage=$stage" >> "$GITHUB_OUTPUT"
       - name: Locate the latest successful persistent research artifact
         id: cache
         uses: actions/github-script@v7
@@ -90,7 +121,7 @@ jobs:
       - name: Collect or publish using actual Beijing time
         id: research
         env:
-          RESEARCH_STAGE: ${{ github.event.inputs.stage || (github.event.schedule == '0 0 * * 1-5' && 'collect' || 'publish') }}
+          RESEARCH_STAGE: ${{ steps.stage.outputs.stage }}
         run: >-
           python runner.py "$RESEARCH_STAGE"
           --engine-dir engine --state-dir .state
@@ -98,7 +129,7 @@ jobs:
           --restore-plans .cache/plans-restored --plans-output .cache/plans-export
           --seed seed/research.json.gz --output-dir public
       - name: Commit changed public advice archive with optimistic concurrency protection
-        if: steps.research.outputs.site_ready == 'true' && (github.event_name == 'push' || github.event.schedule == '0 1 * * 1-5' || github.event.inputs.stage == 'publish')
+        if: steps.research.outputs.site_ready == 'true' && steps.stage.outputs.stage == 'publish'
         uses: actions/github-script@v7
         env:
           PLANS_BASE_SHA: ${{ steps.cache.outputs.plans_base_sha }}
@@ -160,9 +191,11 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
   fundamentals:
-    # Continue the same publish run AFTER deployment; no extra clock.
-    if: needs.deploy.result == 'success' && (github.event_name == 'push' || github.event.schedule == '0 1 * * 1-5' || github.event.inputs.stage == 'publish')
-    needs: [research, deploy]
+    # Long financial refresh must not hold the shared queue ahead of 09:07/09:17
+    # publication recovery. Only the last retry continues the financial chain;
+    # a manual fundamentals run executes that stage directly in research above.
+    if: needs.deploy.result == 'success' && needs.health.result == 'success' && github.event_name == 'schedule' && github.event.schedule == '17 1 * * 1-5'
+    needs: [research, deploy, health]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -235,3 +268,62 @@ jobs:
         uses: actions/deploy-pages@v4
         with:
           artifact_name: github-pages-longterm
+  cloud-status:
+    # Surface actual failure in the run summary; the cloud monitor reads this
+    # run's results. Failed refreshes leave the last successful Pages deployment.
+    if: always()
+    needs: [research, deploy, health, fundamentals, deploy-longterm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Record actual cloud outcomes without claiming on-time publication
+        uses: actions/github-script@v7
+        env:
+          RESEARCH_RESULT: ${{ needs.research.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          FUNDAMENTALS_RESULT: ${{ needs.fundamentals.result }}
+          LONGTERM_RESULT: ${{ needs.deploy-longterm.result }}
+          HEALTH_RESULT: ${{ needs.health.result }}
+          RESEARCH_STAGE: ${{ needs.research.outputs.stage }}
+        with:
+          script: |
+            const completedAt = new Date().toISOString();
+            const results = [
+              ['Research', process.env.RESEARCH_RESULT],
+              ['Pages', process.env.DEPLOY_RESULT],
+              ['Fundamentals', process.env.FUNDAMENTALS_RESULT],
+              ['Long-term Pages', process.env.LONGTERM_RESULT],
+              ['Public site verification', process.env.HEALTH_RESULT]
+            ];
+            await core.summary.addHeading('Actual cloud execution')
+              .addRaw(`Event: ${context.eventName}; stage: ${process.env.RESEARCH_STAGE || 'unresolved'}; observed: ${completedAt}\n\n`)
+              .addTable([['Job', 'Result'], ...results])
+              .addLink('Open this run', `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`)
+              .addRaw('\n\nGitHub schedules can queue or be delayed. Read the daily plan published_at and source timestamps; a successful job does not prove 09:00 publication.\n')
+              .write();
+            if (results.some(([, result]) => ['failure', 'cancelled'].includes(result))) {
+              core.setFailed('A cloud stage failed or was cancelled. Review the job logs; the previous successful static site remains available.');
+            }
+  health:
+    if: always() && needs.deploy.result == 'success'
+    needs: [research, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify the public phone site and the final morning report
+        env:
+          REQUIRE_MORNING: ${{ github.event_name == 'schedule' && github.event.schedule == '17 1 * * 1-5' && 'true' || 'false' }}
+        shell: bash
+        run: |
+          if [ "$REQUIRE_MORNING" = 'true' ]; then
+            python cloud_health.py --require-morning
+          else
+            python cloud_health.py
+          fi

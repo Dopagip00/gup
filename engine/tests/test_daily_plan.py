@@ -20,6 +20,8 @@ class DailyPlanTests(unittest.TestCase):
                 'mae_pct':1,'baseline_mae_pct':1.2,'zero_baseline_mae_pct':1.3,'beats_both_baselines':True,
                 'direction_accuracy_pct':60,'baseline_direction_accuracy_pct':55})
         return {'symbol':symbol,'name':symbol,'date':date,'eligible':eligible,'excluded':False,'stale':False,
+            'chase_risk':{'version':'anti-chase-v1','as_of_date':date,'blocked':False,'gate_passed':True,
+                'entry_ceiling':{'price':10.1,'reference_date':date,'price_basis':'latest_raw_close_scaled_ma20','requires_live_quote':True}},
             'prediction':{'available':True,'eligible':eligible,'rank_value':1.5,'raw_rank_value':1.5,'expected_return_pct':3,
                 'cost_stress_return_pct':2.7,'as_of_date':date,'horizon_days':2,
                 'target_kind':'next_open_to_following_close','session_alignment':'benchmark_sessions',
@@ -33,7 +35,7 @@ class DailyPlanTests(unittest.TestCase):
     def prepare_morning(self,date):
         moment=dt.datetime.fromisoformat(date+'T09:00:00+08:00')
         target=md.last_completed_session(moment)
-        core.putkv('last_success',{'target_date':target,'finished_at':date+'T08:20:00+08:00','model_version':core.forecast.MODEL_VERSION})
+        core.putkv('last_success',{'target_date':target,'finished_at':date+'T08:20:00+08:00','model_version':core.forecast.MODEL_VERSION,'chase_policy_version':'anti-chase-v1'})
         window=min(dt.date.fromisoformat(target),moment.date()-dt.timedelta(days=4)).isoformat()
         core.putkv('morning_news',{'date':date,'status':'verified','as_of':date+'T08:30:00+08:00',
             'collection_started_at':date+'T08:00:00+08:00','window_start':window,'window_end':date,
@@ -51,8 +53,9 @@ class DailyPlanTests(unittest.TestCase):
         if prepare:self.prepare_morning(date)
         with patch.object(core,'now',return_value=now),patch.object(core,'Service') as service:
             service.return_value.dashboard.return_value={'stocks':stocks,'meta':{'coverage':coverage or {'total':100,'ok':100}}}
+            already_published=(core.getkv('daily_plan:'+date,{}) or {}).get('status')=='published'
             result=daily_plan.publish()
-            if result['status']=='published':
+            if result['status']=='published' and not already_published:
                 service.return_value.dashboard.assert_called_once_with(md.last_completed_session(now.replace(hour=9,minute=0)))
             return result
     def test_weekend_next_session_not_calendar_day(self):
@@ -133,6 +136,47 @@ class DailyPlanTests(unittest.TestCase):
             with self.assertRaises(ValueError):daily_plan.publish()
             with self.assertRaises(ValueError):daily_plan.publish('2026-10-16')
 
+    def test_pending_premarket_can_retry_without_rewriting_a_published_plan(self):
+        date='2026-10-19'
+        first=self.run_day(date,[self.stock()],prepare=False)
+        self.assertEqual(first['status'],'pending');self.assertIsNone(first['published_at'])
+        self.assertIsNone(first['buy']);self.assertEqual(first['research_forecasts'],[])
+        second=self.run_day(date,[self.stock()],minute=7)
+        self.assertEqual(second['status'],'published');self.assertIsNotNone(second['buy'])
+        third=self.run_day(date,[self.stock('sh600312')],minute=17)
+        self.assertEqual(third,second)
+
+    def test_chase_risk_and_entry_ceiling_are_independent_hard_gates(self):
+        date='2026-10-19'
+        for change in ({'blocked':True},{'gate_passed':False},{'version':'old'},{'as_of_date':'2026-10-15'},
+                       {'entry_ceiling':{'price':9.9,'reference_date':'2026-10-16','price_basis':'latest_raw_close_scaled_ma20','requires_live_quote':True}}):
+            core.putkv('daily_plan:'+date,{})
+            stock=self.stock();stock['chase_risk'].update(change)
+            self.assertIsNone(self.run_day(date,[stock])['buy'])
+
+    def test_slow_generation_crossing_0930_cannot_keep_an_earlier_buy_or_forecast_time(self):
+        date='2026-10-19';self.prepare_morning(date)
+        start=dt.datetime.fromisoformat(date+'T09:29:59+08:00')
+        finish=dt.datetime.fromisoformat(date+'T09:30:01+08:00')
+        with patch.object(core,'now',side_effect=[start,finish]),patch.object(core,'Service') as service:
+            service.return_value.dashboard.return_value={'stocks':[self.stock()], 'meta':{'coverage':{'total':100,'ok':100}}}
+            result=daily_plan.publish()
+        self.assertTrue(result['late']);self.assertIsNone(result['buy'])
+        self.assertEqual(result['research_forecasts'],[])
+        self.assertEqual(result['published_at'],finish.isoformat())
+        self.assertEqual(result['attempted_at'],start.isoformat())
+
+    def test_publication_appearing_during_dashboard_read_is_never_overwritten(self):
+        date='2026-10-19';self.prepare_morning(date)
+        original={'date':date,'status':'published','published_at':date+'T09:00:01+08:00','buy':{'symbol':'sh600312'},'sell':[]}
+        def dashboard(target):
+            core.putkv('daily_plan:'+date,original)
+            return {'stocks':[self.stock()], 'meta':{'coverage':{'total':100,'ok':100}}}
+        with patch.object(core,'now',return_value=dt.datetime.fromisoformat(date+'T09:01:00+08:00')),patch.object(core,'Service') as service:
+            service.return_value.dashboard.side_effect=dashboard
+            self.assertEqual(daily_plan.publish(),original)
+        self.assertEqual(core.getkv('daily_plan:'+date),original)
+
     def test_window_closes_exactly_at_0930(self):
         a=self.run_day('2026-10-19',[self.stock()],29)
         b=self.run_day('2026-10-20',[self.stock('sh600312',date='2026-10-19')],30)
@@ -212,7 +256,7 @@ class DailyPlanTests(unittest.TestCase):
 
     def test_honest_partial_99_percent_completion_can_prepare_morning_without_relabelling_success(self):
         date='2026-10-19';self.prepare_morning(date);core.putkv('last_success',{})
-        receipt={'target_date':'2026-10-16','finished_at':date+'T08:40:00+08:00','status':'partial','ok':99,'failed':1,'total':100,'model_version':core.forecast.MODEL_VERSION}
+        receipt={'target_date':'2026-10-16','finished_at':date+'T08:40:00+08:00','status':'partial','ok':99,'failed':1,'total':100,'model_version':core.forecast.MODEL_VERSION,'chase_policy_version':'anti-chase-v1'}
         core.putkv('last_completed',receipt)
         result=self.run_day(date,[self.stock()],prepare=False)
         self.assertIsNotNone(result['buy']);self.assertTrue(result['morning_ready']);self.assertEqual(result['research_status'],'partial')
