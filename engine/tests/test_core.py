@@ -1,5 +1,7 @@
+import copy
 import datetime as dt
 import json
+import random
 from pathlib import Path
 import tempfile
 import threading
@@ -10,6 +12,199 @@ from urllib.error import HTTPError
 from http.server import ThreadingHTTPServer
 import core
 import app
+
+
+class DecisionEvidenceTests(unittest.TestCase):
+    """Synthetic price process tests the real v3 fit, never a tuned real stock."""
+
+    @classmethod
+    def setUpClass(cls):
+        randomizer, price, momentum = random.Random(3), 20.0, 0.0
+        history = []
+        for i in range(700):
+            opening = price
+            momentum = max(-.04, min(.04, .9 * momentum + randomizer.gauss(0, .006)))
+            price *= 1 + momentum
+            history.append({'date': (dt.date(2024, 1, 1) + dt.timedelta(days=i)).isoformat(),
+                            'open': opening, 'close': price,
+                            'volume': 100000 + randomizer.randrange(50000)})
+        cls.legal_prediction = core.forecast.predict(history, history)
+        cls.target = history[-1]['date']
+
+    def prediction(self):
+        return copy.deepcopy(self.legal_prediction)
+
+    def rebuild_summaries(self, prediction):
+        decision = prediction['validation_decision']
+        opportunities = decision['opportunities']
+        decision['aggregate'] = core.forecast._decision_metrics(opportunities)
+        decision['folds'] = [{'fold': fold, **core.forecast._decision_metrics(
+            [item for item in opportunities if item['fold'] == fold])} for fold in (1, 2, 3)]
+        decision['latest_fold'] = copy.deepcopy(decision['folds'][-1])
+
+    def assert_rejected(self, prediction):
+        self.assertTrue(core.prediction_failures(prediction, self.target))
+
+    def test_real_v3_fit_with_legal_decision_evidence_passes_independent_gate(self):
+        prediction = self.prediction()
+        self.assertTrue(prediction['eligible'], prediction['reason'])
+        self.assertTrue(prediction['validation_decision']['eligible'])
+        self.assertEqual(core.decision_validation_failures(prediction, self.target), [])
+        self.assertEqual(core.prediction_failures(prediction, self.target), [])
+        stock = {'symbol': 'sh600298', 'eligible': True, 'prediction': prediction}
+        checked = core.prediction_gate(stock, self.target)
+        self.assertTrue(checked['eligible'])
+        self.assertTrue(checked['prediction_current'])
+
+    def test_decision_protocol_flags_cost_and_fixed_sample_thresholds_are_required(self):
+        for changes in ({'protocol': 'old'}, {'eligible': False}, {'eligible': 1},
+                        {'cost_stress_pct': .1}, {'cost_stress_pct': True},
+                        {'minimum_trades': 20}, {'minimum_trades': 30.0},
+                        {'minimum_latest_trades': 1}, {'failures': ['still failed']},
+                        {'selection_rule': 'choose_after_realized_profit'}):
+            with self.subTest(changes=changes):
+                prediction = self.prediction()
+                prediction['validation_decision'].update(changes)
+                self.assert_rejected(prediction)
+        prediction = self.prediction()
+        prediction.pop('validation_decision')
+        self.assert_rejected(prediction)
+
+    def test_current_feature_z_requires_finite_nonboolean_evidence_within_four(self):
+        for value in (None, True, float('nan'), float('inf'), -1, 5, 10 ** 400):
+            with self.subTest(value=value):
+                prediction = self.prediction()
+                prediction['current_feature_max_abs_z'] = value
+                self.assert_rejected(prediction)
+        prediction = self.prediction()
+        prediction.pop('current_feature_max_abs_z')
+        self.assert_rejected(prediction)
+        for value in (0, 4):
+            prediction = self.prediction()
+            prediction['current_feature_max_abs_z'] = value
+            self.assertEqual(core.prediction_failures(prediction, self.target), [])
+
+    def test_summary_tampering_is_rejected_for_every_numeric_boolean_and_null_metric(self):
+        for section in ('aggregate', 'latest_fold', 'fold0'):
+            prediction = self.prediction()
+            metrics = prediction['validation_decision']['folds'][0] if section == 'fold0' else prediction['validation_decision'][section]
+            for key, original in metrics.items():
+                with self.subTest(section=section, key=key):
+                    changed = self.prediction()
+                    saved = changed['validation_decision']['folds'][0] if section == 'fold0' else changed['validation_decision'][section]
+                    saved[key] = (not original if type(original) is bool else
+                                  0 if original is None else original + 1)
+                    self.assert_rejected(changed)
+
+    def test_summary_cannot_replace_counters_with_booleans_or_nonfinite_values(self):
+        for key, value in (('samples', True), ('trades', 30.0),
+                           ('net_mean_per_opportunity_pct', float('nan')),
+                           ('net_compound_return_pct', float('inf')),
+                           ('max_drawdown_pct', False)):
+            with self.subTest(key=key, value=value):
+                prediction = self.prediction()
+                prediction['validation_decision']['aggregate'][key] = value
+                self.assert_rejected(prediction)
+
+    def test_decision_dates_future_fold_mismatch_overlap_and_reordering_fail(self):
+        mutations = [
+            lambda items: items[-1].update(exit_date=(dt.date.fromisoformat(self.target) + dt.timedelta(days=1)).isoformat()),
+            lambda items: items[0].update(fold=2),
+            lambda items: items[0].update(feature_date='20251130'),
+            lambda items: items[0].update(entry_date=items[0]['feature_date']),
+            lambda items: items[1].update(feature_date=items[0]['entry_date'], entry_date=items[0]['exit_date']),
+            lambda items: items.__setitem__(slice(0, 2), list(reversed(items[:2]))),
+            lambda items: items.__setitem__(1, copy.deepcopy(items[0])),
+        ]
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                prediction = self.prediction()
+                mutate(prediction['validation_decision']['opportunities'])
+                self.assert_rejected(prediction)
+
+    def test_opportunity_count_matches_nonoverlap_and_each_fold_has_evidence(self):
+        for change in ('missing', 'extra', 'wrong_count', 'missing_fold'):
+            with self.subTest(change=change):
+                prediction = self.prediction()
+                decision = prediction['validation_decision']
+                if change == 'missing':
+                    decision['opportunities'].pop()
+                elif change == 'extra':
+                    decision['opportunities'].append(copy.deepcopy(decision['opportunities'][-1]))
+                elif change == 'wrong_count':
+                    prediction['validation_nonoverlapping']['samples'] = True
+                else:
+                    decision['opportunities'] = [item for item in decision['opportunities'] if item['fold'] != 2]
+                    prediction['validation_nonoverlapping']['samples'] = len(decision['opportunities'])
+                self.assert_rejected(prediction)
+
+    def test_opportunity_fields_must_be_finite_numbers_and_selector_boolean(self):
+        for field in ('estimate_pct', 'gross_return_pct', 'net_return_pct', 'passive_net_return_pct'):
+            for value in (True, None, float('nan'), float('inf'), 10 ** 400):
+                with self.subTest(field=field, value=value):
+                    prediction = self.prediction()
+                    prediction['validation_decision']['opportunities'][0][field] = value
+                    self.assert_rejected(prediction)
+        for field, value in (('selected', 1), ('fold', True), ('fold', 1.0)):
+            prediction = self.prediction()
+            prediction['validation_decision']['opportunities'][0][field] = value
+            self.assert_rejected(prediction)
+
+    def test_selection_and_net_cost_arithmetic_are_checked_before_saved_metrics(self):
+        for mutate in (lambda item: item.update(selected=not item['selected']),
+                       lambda item: item.update(net_return_pct=item['net_return_pct'] + .3),
+                       lambda item: item.update(passive_net_return_pct=item['passive_net_return_pct'] + .3)):
+            prediction = self.prediction()
+            mutate(prediction['validation_decision']['opportunities'][0])
+            self.rebuild_summaries(prediction)
+            self.assert_rejected(prediction)
+
+    def test_exact_cost_boundary_means_cash_even_if_saved_eligible_says_buy(self):
+        prediction = self.prediction()
+        item = next(item for item in prediction['validation_decision']['opportunities']
+                    if item['selected'] and item['net_return_pct'] < 0 and item['fold'] == 1)
+        item['estimate_pct'] = .30
+        self.assert_rejected(prediction)
+        item.update(selected=False, net_return_pct=0.0)
+        self.rebuild_summaries(prediction)
+        self.assertEqual(core.prediction_failures(prediction, self.target), [])
+        item.update(estimate_pct=.30 + 1e-12, selected=True,
+                    net_return_pct=item['gross_return_pct'] - .30)
+        self.rebuild_summaries(prediction)
+        self.assertEqual(core.prediction_failures(prediction, self.target), [])
+
+    def test_forged_positive_eligibility_and_rebuilt_summaries_cannot_hide_real_losses(self):
+        prediction = self.prediction()
+        for item in prediction['validation_decision']['opportunities']:
+            if item['selected']:
+                item.update(gross_return_pct=-2, net_return_pct=-2.3, passive_net_return_pct=-2.3)
+        self.rebuild_summaries(prediction)
+        self.assertTrue(prediction['validation_decision']['eligible'])
+        failures = core.prediction_failures(prediction, self.target)
+        self.assertTrue(any('独立重算的成本压力后每机会收益' in text for text in failures), failures)
+
+    def test_forged_sample_summaries_cannot_hide_actual_small_selected_subset(self):
+        prediction = self.prediction()
+        opportunities = prediction['validation_decision']['opportunities']
+        for item in opportunities:
+            item.update(estimate_pct=.3, selected=False, net_return_pct=0)
+        for item in opportunities[:5]:
+            item.update(estimate_pct=1, selected=True, net_return_pct=item['gross_return_pct'] - .3)
+        self.rebuild_summaries(prediction)
+        failures = core.prediction_failures(prediction, self.target)
+        self.assertTrue(any('独立重算的汇总或最近段选择周期不足' in text for text in failures), failures)
+
+    def test_prediction_gate_recheck_does_not_rewrite_original_snapshot(self):
+        prediction = self.prediction()
+        prediction['current_feature_max_abs_z'] = 5
+        archived = {'symbol': 'sh600298', 'eligible': True, 'entry_low': 10,
+                    'prediction': prediction, 'published_at': '2026-10-19T09:01:00+08:00'}
+        original = copy.deepcopy(archived)
+        result = core.prediction_gate(archived, self.target)
+        self.assertFalse(result['eligible'])
+        self.assertFalse(result['prediction']['eligible'])
+        self.assertIsNone(result['prediction']['rank_value'])
+        self.assertEqual(archived, original)
 
 
 class PlatformTests(unittest.TestCase):

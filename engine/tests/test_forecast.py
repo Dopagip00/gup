@@ -256,8 +256,8 @@ class ForecastTests(unittest.TestCase):
         for history in ([], bars(246), bars(365)):
             result = forecast.predict(history)
             for value in (result, result['next_day']):
-                self.assertEqual(value['model_version'], 'ridge-cycle-v2')
-                self.assertEqual(value['validation_protocol'], 'purged-expanding-3x60-v1')
+                self.assertEqual(value['model_version'], 'ridge-cycle-v3')
+                self.assertEqual(value['validation_protocol'], 'purged-expanding-3x60-decision-v1')
             self.assertFalse(result['validation_protocol_complete'])
             self.assertFalse(result['eligible'])
         boundary = forecast.predict(bars(366))
@@ -373,6 +373,216 @@ class ForecastTests(unittest.TestCase):
         self.assertIn('最近60根特征日线未连续对齐', result['reason'])
         old_gap = copy.deepcopy(benchmark[:150] + benchmark[151:])
         self.assertTrue(forecast.predict(old_gap, benchmark)['latest_feature_window_aligned'])
+
+    def decision_inputs(self, count=180):
+        history = bars(count + 5)
+        observations = [{'index': i, 'fold': i // 60 + 1, 'estimate': 1.0, 'y': 1.0}
+                        for i in range(count)]
+        return history, observations
+
+    def test_decision_grid_is_fixed_before_positive_prediction_selection(self):
+        history, observations = self.decision_inputs(6)
+        for item in observations:
+            item['estimate'] = 1.0 if item['index'] % 2 else -1.0
+        result = forecast._decision_validation(observations, history, 2, 1)
+        self.assertEqual([item['feature_date'] for item in result['opportunities']],
+                         [history[i]['date'] for i in (0, 2, 4)])
+        self.assertEqual(result['aggregate']['samples'], 3)
+        self.assertEqual(result['aggregate']['trades'], 0)
+        self.assertEqual(result['aggregate']['cash_opportunities'], 3)
+        self.assertEqual(result['aggregate']['net_compound_return_pct'], 0)
+        self.assertFalse(result['aggregate']['beats_cash_and_passive'])
+
+    def test_decision_cash_and_passive_use_identical_full_opportunity_denominator(self):
+        history, observations = self.decision_inputs(8)
+        for i, estimate, actual in ((0, 1, 2), (2, .3, .5), (4, -.1, -1), (6, 2, 1)):
+            observations[i].update(estimate=estimate, y=actual)
+        result = forecast._decision_validation(observations, history, 2, 1)
+        metrics = result['aggregate']
+        self.assertEqual(metrics['samples'], 4)
+        self.assertEqual(metrics['trades'], 2)
+        self.assertAlmostEqual(metrics['net_mean_per_opportunity_pct'], .6)
+        self.assertAlmostEqual(metrics['net_mean_selected_pct'], 1.2)
+        self.assertAlmostEqual(metrics['passive_net_mean_pct'], .325)
+        self.assertAlmostEqual(metrics['net_compound_return_pct'], (1.017 * 1.007 - 1) * 100)
+        self.assertAlmostEqual(metrics['passive_net_compound_return_pct'],
+                               (1.017 * 1.002 * .987 * 1.007 - 1) * 100)
+        self.assertEqual([item['net_return_pct'] for item in result['opportunities']], [1.7, 0, 0, .7])
+        self.assertEqual(metrics['max_drawdown_pct'], 0)
+        self.assertAlmostEqual(metrics['passive_max_drawdown_pct'], 1.3)
+
+    def test_sixty_percent_winners_can_still_fail_cost_stressed_decision_evidence(self):
+        history, observations = self.decision_inputs()
+        pattern = (1, 1, 1, -3, -3)
+        for item in observations:
+            item['y'] = pattern[item['index'] % 5]
+        decision = forecast._decision_validation(observations, history, 2, 3)
+        metrics = decision['aggregate']
+        self.assertEqual(metrics['trades'], 90)
+        self.assertEqual(metrics['winning_trades'], 54)
+        self.assertEqual(metrics['losing_trades'], 36)
+        self.assertAlmostEqual(metrics['average_win_pct'], .7)
+        self.assertAlmostEqual(metrics['average_loss_pct'], -3.3)
+        self.assertAlmostEqual(metrics['net_mean_per_opportunity_pct'], -.9)
+        self.assertAlmostEqual(metrics['expected_shortfall_10_pct'], -3.3)
+        self.assertLess(metrics['net_compound_return_pct'], 0)
+        self.assertGreater(metrics['max_drawdown_pct'], 0)
+        self.assertFalse(metrics['beats_cash_and_passive'])
+        failures = forecast._decision_failures(decision)
+        self.assertTrue(any('合并非重叠决策验证' in item for item in failures))
+        self.assertTrue(any('最近段非重叠决策验证' in item for item in failures))
+
+    def test_cost_boundary_is_strict_and_evidence_does_not_round_selection(self):
+        history, observations = self.decision_inputs(4)
+        observations[0]['estimate'] = forecast.ROUND_TRIP_COST_STRESS_PCT
+        observations[2]['estimate'] = forecast.ROUND_TRIP_COST_STRESS_PCT + 1e-12
+        decision = forecast._decision_validation(observations, history, 2, 1)
+        self.assertEqual([item['selected'] for item in decision['opportunities']], [False, True])
+        self.assertEqual(decision['opportunities'][1]['estimate_pct'], observations[2]['estimate'])
+        self.assertEqual(decision['cost_stress_pct'], .30)
+
+    def test_latest_validation_open_labels_change_outcomes_but_not_oos_selection(self):
+        history = bars(500)
+        original = forecast.predict(history)
+        changed = copy.deepcopy(history)
+        for row in changed[-20:]:
+            row['open'] *= 1.04
+        altered = forecast.predict(changed)
+        before, after = original['validation_decision'], altered['validation_decision']
+        self.assertEqual([item['estimate_pct'] for item in before['opportunities']],
+                         [item['estimate_pct'] for item in after['opportunities']])
+        self.assertEqual([item['selected'] for item in before['opportunities']],
+                         [item['selected'] for item in after['opportunities']])
+        self.assertNotEqual([item['gross_return_pct'] for item in before['opportunities']],
+                            [item['gross_return_pct'] for item in after['opportunities']])
+
+    def test_decision_grid_does_not_reset_at_fold_boundary_with_missing_sample(self):
+        history, observations = self.decision_inputs()
+        # A missing valid sample changes holding-period parity. Restarting the
+        # grid in fold 2 would share a holding session with fold 1's last cycle.
+        for item in observations:
+            if item['index'] >= 29:
+                item['index'] += 1
+        decision = forecast._decision_validation(observations, history, 2, 3)
+        grid = decision['opportunities']
+        for left, right in zip(grid, grid[1:]):
+            self.assertGreater(right['entry_date'], left['exit_date'])
+        first_fold2 = next(item for item in grid if item['fold'] == 2)
+        self.assertEqual(first_fold2['feature_date'], history[62]['date'])
+        self.assertEqual(sum(item['samples'] for item in decision['folds']), decision['aggregate']['samples'])
+        self.assertEqual(decision['latest_fold'], decision['folds'][-1])
+
+    def test_selected_positive_mean_cannot_hide_worse_full_grid_result_than_passive(self):
+        history, observations = self.decision_inputs()
+        for item in observations:
+            item.update(estimate=1 if item['index'] % 4 == 0 else -1,
+                        y=1 if item['index'] % 4 == 0 else 3)
+        decision = forecast._decision_validation(observations, history, 2, 3)
+        aggregate = decision['aggregate']
+        self.assertGreater(aggregate['net_mean_selected_pct'], 0)
+        self.assertGreater(aggregate['net_mean_per_opportunity_pct'], 0)
+        self.assertLess(aggregate['net_mean_per_opportunity_pct'], aggregate['passive_net_mean_pct'])
+        self.assertFalse(aggregate['beats_cash_and_passive'])
+        self.assertTrue(forecast._decision_failures(decision))
+
+    def test_aggregate_and_latest_selected_sample_minima_are_separate(self):
+        history, observations = self.decision_inputs()
+        for item in observations:
+            item['estimate'] = 1 if item['index'] < 60 else -1
+        decision = forecast._decision_validation(observations, history, 2, 3)
+        self.assertEqual(decision['aggregate']['trades'], 30)
+        self.assertEqual(decision['latest_fold']['trades'], 0)
+        self.assertFalse(any('非重叠选择周期不足30' in item for item in forecast._decision_failures(decision)))
+        self.assertTrue(any('最近段成本压力决策验证的选择周期不足10' in item for item in forecast._decision_failures(decision)))
+        for item in observations:
+            item['estimate'] = 1 if (item['index'] < 38 or 120 <= item['index'] < 140) else -1
+        decision = forecast._decision_validation(observations, history, 2, 3)
+        self.assertEqual(decision['aggregate']['trades'], 29)
+        self.assertEqual(decision['latest_fold']['trades'], 10)
+        self.assertTrue(any('非重叠选择周期不足30' in item for item in forecast._decision_failures(decision)))
+        self.assertFalse(any('最近段成本压力决策验证的选择周期不足10' in item for item in forecast._decision_failures(decision)))
+
+    def test_current_feature_z_is_exposed_with_same_four_sigma_gate(self):
+        history = bars(500)
+        rows = forecast._prepare(history, require_open=True)
+        features = {i: [0.0] for i in range(forecast.FEATURE_START, len(rows))}
+        features[len(rows) - 1] = [5.0]
+        with patch.object(forecast, '_fit', return_value={'center': [0.0], 'scale': [1.0]}), \
+                patch.object(forecast, '_estimate', return_value=1.0):
+            result = forecast._horizon(rows, features, False, 2)
+        self.assertEqual(result['current_feature_max_abs_z'], 5)
+        self.assertFalse(result['eligible'])
+        self.assertIn('超过4个标准差', result['reason'])
+        self.assertIsNone(forecast.predict([])['current_feature_max_abs_z'])
+
+    def test_decision_evidence_exists_for_both_targets_with_purged_mature_dates(self):
+        history = bars(500)
+        result = forecast.predict(history, history)
+        for prediction in (result, result['next_day']):
+            decision = prediction['validation_decision']
+            self.assertEqual(decision['protocol'], 'fixed-nonoverlap-positive-net-v1')
+            self.assertEqual(decision['minimum_trades'], 30)
+            self.assertEqual(decision['minimum_latest_trades'], 10)
+            self.assertTrue(math.isfinite(prediction['current_feature_max_abs_z']))
+            for item in decision['opportunities']:
+                fold = prediction['validation_folds'][item['fold'] - 1]
+                self.assertLess(fold['training_label_end'], item['feature_date'])
+                self.assertLessEqual(item['feature_date'], item['entry_date'])
+                self.assertLess(item['entry_date'], item['exit_date'])
+                self.assertLessEqual(item['exit_date'], prediction['as_of_date'])
+                self.assertEqual(item['selected'], item['estimate_pct'] > .30)
+                self.assertAlmostEqual(item['passive_net_return_pct'], item['gross_return_pct'] - .30)
+                self.assertEqual(item['net_return_pct'], item['passive_net_return_pct'] if item['selected'] else 0)
+            if prediction['eligible']:
+                self.assertFalse(forecast._decision_failures(decision))
+
+    def test_positive_decision_evidence_can_pass_without_forcing_actual_predictions(self):
+        history, observations = self.decision_inputs()
+        for item in observations:
+            chosen = item['index'] % 4 == 0
+            item.update(estimate=1 if chosen else -1, y=1 if chosen else -1)
+        decision = forecast._decision_validation(observations, history, 2, 3)
+        self.assertEqual(decision['aggregate']['trades'], 45)
+        self.assertEqual(decision['latest_fold']['trades'], 15)
+        self.assertGreater(decision['aggregate']['net_mean_per_opportunity_pct'], 0)
+        self.assertLess(decision['aggregate']['passive_net_mean_pct'], 0)
+        self.assertTrue(decision['eligible'])
+        self.assertEqual(decision['failures'], [])
+
+    def test_good_mae_direction_and_current_rank_cannot_override_losing_decision_cycles(self):
+        history = bars(500)
+        for i, row in enumerate(history):
+            row.update(open=1.0, close=1.004 if i % 5 < 3 else .995, volume=10000)
+        rows = forecast._prepare(history, require_open=True)
+        samples = len(rows) - forecast.FEATURE_START - 2
+        features = {i: [i] for i in range(forecast.FEATURE_START, len(rows))}
+
+        def fit(items):
+            return {'count': len(items), 'center': [0.0], 'scale': [10000.0]}
+
+        def estimate(model, values):
+            if model['count'] == samples:
+                return 3.0  # Current positive rank must not override OOS loss.
+            # A fixed synthetic calendar rule, not a read of validation labels:
+            # 60% correct positives improve MAE over the positive median, but
+            # 0.30% costs and larger losses still make buying every signal lose.
+            return .4 if (values[0] + 2) % 5 < 3 else .31
+
+        with patch.object(forecast, '_fit', side_effect=fit), patch.object(forecast, '_estimate', side_effect=estimate):
+            result = forecast._horizon(rows, features, False, 2, rows)
+        self.assertTrue(result['validation_protocol_complete'])
+        self.assertTrue(all(fold['beats_both_baselines'] for fold in result['validation_folds']))
+        self.assertTrue(result['validation_aggregate']['beats_both_baselines'])
+        self.assertEqual(result['validation_direction_accuracy_pct'], 60)
+        self.assertEqual(result['validation_nonoverlapping']['direction_accuracy_pct'], 60)
+        self.assertGreater(result['raw_rank_value'], 0)
+        self.assertLess(result['current_feature_max_abs_z'], 4)
+        self.assertTrue(result['latest_feature_window_aligned'])
+        self.assertEqual(result['validation_decision']['aggregate']['trades'], 90)
+        self.assertLess(result['validation_decision']['aggregate']['net_mean_per_opportunity_pct'], 0)
+        self.assertFalse(result['validation_decision']['eligible'])
+        self.assertFalse(result['eligible'])
+        self.assertIn('成本压力后每机会收益未同时胜过现金0', result['reason'])
 
 
 if __name__ == "__main__":

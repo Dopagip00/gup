@@ -11,6 +11,7 @@ on:
       - 'engine/**'
       - 'seed/**'
       - 'tests/**'
+      - 'research/ai-reviews/**'
   schedule:
     # UTC. The original 08:00 collection / 09:00 publication remain the targets.
     # A few off-hour retries share the same pre-market window; actual Beijing

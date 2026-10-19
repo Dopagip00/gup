@@ -21,15 +21,18 @@ MIN_TRAIN = 120
 HOLDOUT = 60
 EMBARGO = 5
 RIDGE_ALPHA = 10.0
-MODEL_VERSION = "ridge-cycle-v2"
-VALIDATION_PROTOCOL = "purged-expanding-3x60-v1"
+MODEL_VERSION = "ridge-cycle-v3"
+VALIDATION_PROTOCOL = "purged-expanding-3x60-decision-v1"
 VALIDATION_FOLDS = 3
+DECISION_PROTOCOL = "fixed-nonoverlap-positive-net-v1"
+MIN_DECISION_TRADES = 30
+MIN_LATEST_DECISION_TRADES = 10
 # An explicit research stress assumption, not a brokerage fee quotation. Small
 # orders, slippage, taxes, price limits and unfilled orders can cost more.
 ROUND_TRIP_COST_STRESS_PCT = 0.30
 FEATURE_START = 59
 BASE_FEATURES = ["5日涨跌幅", "20日涨跌幅", "收盘偏离MA20", "MA20偏离MA60", "20日波动率", "成交量对数比"]
-METHOD = "固定参数岭回归；末3段各60个成熟样本按时间递增训练验证，每段训练至少120条并隔离5条；参数不按验证结果搜索。不足3段时仅显示研究。当前预测使用截至报告日已成熟样本拟合。"
+METHOD = "固定参数岭回归；末3段各60个成熟样本按时间递增训练验证，每段训练至少120条并隔离5条；固定非重叠机会网格上仅选择当时折外预测大于0.30个百分点的周期，汇总及最近段须在成本压力后胜过现金与同网格每轮买入基准。参数不按验证结果搜索。不足3段时仅显示研究。当前预测使用截至报告日已成熟样本拟合。"
 WARNINGS = [
     "预期涨幅是统计模型估计，不是承诺、目标收益或上涨概率；价格预测准确性不能保证。",
     "预测范围来自历史验证误差的10%至90%分位数，未做独立概率校准，不是保证覆盖未来的置信区间。",
@@ -39,6 +42,7 @@ WARNINGS = [
     "全市场比较大量股票会产生偶然优胜者；排名第一仅表示本模型当前相对得分最高，不能证明最值得买。",
     "模型使用当前下载的前复权历史；历史复权修订、股票选择偏差和市场状态变化可能降低实际效果。",
     "主预测和历史标签均为未扣成本收益；成本压力项固定减去0.30个百分点作研究筛选，不是实际收费或保证可成交净收益，小额佣金及滑点可能更高。",
+    "决策验证是已成熟折外预测的固定网格成本压力研究，不是实盘净收益；未模拟涨停开盘买不到、跌停无法退出、窄区间未成交或连续持仓，不能证明未来能获利。",
 ]
 
 
@@ -64,6 +68,7 @@ def _empty(horizon, reason, as_of=None, count=0):
     return {"available": False, "eligible": False, **_target_metadata(horizon),
             "model_version": MODEL_VERSION, "validation_protocol": VALIDATION_PROTOCOL,
             "validation_protocol_complete": False, "validation_folds": [],
+            "validation_decision": None, "current_feature_max_abs_z": None,
             "as_of_date": as_of, "expected_return_pct": None,
             "interval_low_pct": None, "interval_high_pct": None,
             "sample_count": count, "training_samples": 0, "validation_samples": 0,
@@ -241,6 +246,99 @@ def _nonoverlapping(observations, horizon):
     return selected
 
 
+def _decision_metrics(opportunities):
+    """Cost-stressed, fully invested synthetic cycles, with cash in skipped ones.
+
+    Means have a common opportunity denominator. The passive comparator enters
+    every cycle on that same grid; it is not a continuous buy-and-hold portfolio.
+    No return is used to choose opportunities or decide whether to enter them.
+    """
+    net = [item["net_return_pct"] for item in opportunities]
+    passive = [item["passive_net_return_pct"] for item in opportunities]
+    selected = [item["net_return_pct"] for item in opportunities if item["selected"]]
+    if any(not math.isfinite(value) or value <= -100 for value in net + passive):
+        raise ValueError("成本压力周期收益无效或使研究本金归零，无法计算可比的复合研究结果")
+
+    def equity(values):
+        balance, peak, drawdown = 1.0, 1.0, 0.0
+        for value in values:
+            balance *= 1 + value / 100
+            peak = max(peak, balance)
+            drawdown = max(drawdown, (peak - balance) / peak * 100)
+        return (balance - 1) * 100, drawdown
+
+    compound, drawdown = equity(net)
+    passive_compound, passive_drawdown = equity(passive)
+    opportunity_mean = mean(net) if net else 0.0
+    passive_mean = mean(passive) if passive else 0.0
+    winners = [value for value in selected if value > 0]
+    losers = [value for value in selected if value < 0]
+    tail = sorted(selected)[:max(1, math.ceil(len(selected) * 0.10))]
+    rounded = lambda value: round(value, 9) if value is not None else None
+    return {"samples": len(opportunities), "trades": len(selected),
+            "cash_opportunities": len(opportunities) - len(selected),
+            "net_mean_per_opportunity_pct": rounded(opportunity_mean),
+            "net_mean_selected_pct": rounded(mean(selected) if selected else None),
+            "net_compound_return_pct": rounded(compound),
+            "passive_net_mean_pct": rounded(passive_mean),
+            "passive_net_compound_return_pct": rounded(passive_compound),
+            "winning_trades": len(winners), "losing_trades": len(losers),
+            "flat_trades": len(selected) - len(winners) - len(losers),
+            "average_win_pct": rounded(mean(winners) if winners else None),
+            "average_loss_pct": rounded(mean(losers) if losers else None),
+            "worst_trade_pct": rounded(min(selected) if selected else None),
+            "expected_shortfall_10_pct": rounded(mean(tail) if tail else None),
+            "max_drawdown_pct": rounded(drawdown),
+            "passive_max_drawdown_pct": rounded(passive_drawdown),
+            "beats_cash_and_passive": opportunity_mean > 0 and opportunity_mean > passive_mean}
+
+
+def _decision_validation(observations, rows, horizon, fold_count):
+    """Freeze the full nonoverlap grid before inspecting predicted entry values."""
+    opportunities = []
+    for item in _nonoverlapping(observations, horizon):
+        selected = item["estimate"] > ROUND_TRIP_COST_STRESS_PCT
+        passive = item["y"] - ROUND_TRIP_COST_STRESS_PCT
+        opportunities.append({"fold": item["fold"], "feature_date": rows[item["index"]]["date"],
+            "entry_date": rows[item["index"] + (1 if horizon == 2 else 0)]["date"],
+            "exit_date": rows[item["index"] + horizon]["date"],
+            # Keep the original finite floats: rounding an estimate at the cost
+            # boundary before independent verification could change selection.
+            "estimate_pct": item["estimate"], "gross_return_pct": item["y"],
+            "selected": selected, "net_return_pct": passive if selected else 0.0,
+            "passive_net_return_pct": passive})
+    folds = [{"fold": number, **_decision_metrics([item for item in opportunities if item["fold"] == number])}
+             for number in range(1, fold_count + 1)]
+    result = {"protocol": DECISION_PROTOCOL,
+            "selection_rule": "fold_out_of_fit_estimate_gt_cost", "cost_stress_pct": ROUND_TRIP_COST_STRESS_PCT,
+            "minimum_trades": MIN_DECISION_TRADES, "minimum_latest_trades": MIN_LATEST_DECISION_TRADES,
+            "aggregate": _decision_metrics(opportunities), "latest_fold": folds[-1], "folds": folds,
+            "opportunities": opportunities,
+            "grid_method": "先按所有折外样本固定非重叠持有期，再以当时该折预测严格大于成本压力决定是否进入；未进入记现金0，跨验证段不重置网格",
+            "comparison_basis": "相同完整机会网格，每轮同额初始研究本金的简单收益均值；复合值另假设每轮全额再投入，跳过轮次持现金。被动基准在每个网格周期均买入，并非连续买入持有。",
+            "tail_basis": "已选择周期成本压力收益的最低ceil(10%×选择数)条均值；平均亏损与尾部收益保留负号，不是未来概率或损失上界",
+            "execution_note": "仅为成本压力研究，不是实际可成交净收益；未模拟涨停开盘、跌停退出、滑点差异或研究区间未成交，不对未来获利作保证"}
+    result["failures"] = _decision_failures(result)
+    result["eligible"] = not result["failures"]
+    return result
+
+
+def _decision_failures(decision):
+    aggregate, latest = decision["aggregate"], decision["latest_fold"]
+    failures = []
+    if len(decision["folds"]) != VALIDATION_FOLDS:
+        failures.append(f"成本压力决策验证不足完整{VALIDATION_FOLDS}段")
+    if aggregate["trades"] < MIN_DECISION_TRADES:
+        failures.append(f"成本压力决策验证的非重叠选择周期不足{MIN_DECISION_TRADES}条")
+    if latest["trades"] < MIN_LATEST_DECISION_TRADES:
+        failures.append(f"最近段成本压力决策验证的选择周期不足{MIN_LATEST_DECISION_TRADES}条")
+    for name, metrics in (("合并", aggregate), ("最近段", latest)):
+        if not (metrics["net_mean_per_opportunity_pct"] > 0
+                and metrics["net_mean_per_opportunity_pct"] > metrics["passive_net_mean_pct"]):
+            failures.append(f"{name}非重叠决策验证的成本压力后每机会收益未同时胜过现金0与相同网格每轮买入基准")
+    return failures
+
+
 def _latest_window_aligned(rows, benchmark):
     if benchmark is None:
         return None
@@ -289,7 +387,8 @@ def _horizon(rows, features, use_benchmark, horizon, benchmark=None):
         earlier_validation = samples[start:start + HOLDOUT]
         evaluated.append(_evaluate_fold(earlier_train, earlier_validation, rows, horizon))
     evaluated.reverse()
-    observations = [item for values, _ in evaluated for item in values]
+    observations = [dict(item, fold=number + 1)
+                    for number, (values, _) in enumerate(evaluated) for item in values]
     folds = [dict(metrics, fold=number + 1) for number, (_, metrics) in enumerate(evaluated)]
     complete = len(folds) == VALIDATION_FOLDS
     aggregate = _validation_metrics(observations)
@@ -299,6 +398,7 @@ def _horizon(rows, features, use_benchmark, horizon, benchmark=None):
                        "feature_end": rows[nonoverlap_observations[-1]["index"]]["date"],
                        "label_end": rows[nonoverlap_observations[-1]["index"] + horizon]["date"],
                        "method": "按时间顺序取不重叠持有期；仅诊断标签重叠，未消除市场相关或多股票筛选偏差"})
+    decision = _decision_validation(observations, rows, horizon, len(folds))
     residuals = [item["residual"] for item in observations]
     latest_residuals = [item["residual"] for item in latest_observations]
     mae = mean(abs(value) for value in latest_residuals)
@@ -351,6 +451,7 @@ def _horizon(rows, features, use_benchmark, horizon, benchmark=None):
         failures.append("扣除误差、样本惩罚及0.30个百分点成本压力后的排名值不为正")
     if current_z > 4:
         failures.append("当前特征偏离训练分布超过4个标准差")
+    failures.extend(_decision_failures(decision))
     if rows[-1]["volume"] <= 0:
         failures.append("最新日线无成交量")
     latest_window_aligned = _latest_window_aligned(rows, benchmark)
@@ -363,6 +464,7 @@ def _horizon(rows, features, use_benchmark, horizon, benchmark=None):
         "validation_protocol_complete": complete,
         "validation_folds": folds, "validation_aggregate": aggregate,
         "validation_nonoverlapping": nonoverlap, "interval_validation": coverage,
+        "validation_decision": decision, "current_feature_max_abs_z": current_z,
         "latest_feature_window_aligned": latest_window_aligned,
         "as_of_date": rows[-1]["date"],
         "expected_return_pct": round(expected, 3), "interval_low_pct": round(interval_low, 3),

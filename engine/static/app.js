@@ -6,10 +6,21 @@ const universeNames = {watchlist: '自选观察池', sse50: '上证 50 成分股
 const statusNames = {idle:'等待计划更新', running:'正在更新', success:'更新完成', partial:'部分数据异常', error:'更新失败', pending:'待成交', filled:'已成交', expired:'已失效', cancelled:'已撤销'};
 const numeric = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 const number = (value, digits = 2) => numeric(value) ? Number(value).toLocaleString('zh-CN', {minimumFractionDigits:digits, maximumFractionDigits:digits}) : '—';
-const shortEligible = stock => stock?.eligible === true && stock?.prediction?.available === true && stock?.prediction?.eligible === true && stock?.chase_risk?.version === 'anti-chase-v1' && stock.chase_risk.gate_passed === true && stock.chase_risk.blocked === false && !stock.stale && !stock.excluded && numeric(stock.prediction.rank_value) && numeric(stock.prediction.expected_return_pct);
+const currentPrediction = p => p?.model_version === 'ridge-cycle-v3' && p?.validation_protocol === 'purged-expanding-3x60-decision-v1' && p?.available === true && p?.eligible === true && p?.validation_decision?.protocol === 'fixed-nonoverlap-positive-net-v1' && p.validation_decision.eligible === true;
+const shortEligible = stock => stock?.eligible === true && currentPrediction(stock?.prediction) && stock?.chase_risk?.version === 'anti-chase-v1' && stock.chase_risk.gate_passed === true && stock.chase_risk.blocked === false && !stock.stale && !stock.excluded && numeric(stock.prediction.rank_value) && numeric(stock.prediction.expected_return_pct);
 const publicSnapshot = () => Boolean(window.PagesResearch) || location.hostname === 'dopagip00.github.io';
 const predictionRank = stock => stock?.prediction?.available !== false && numeric(stock?.prediction?.rank_value) ? Number(stock.prediction.rank_value) : -Infinity;
 const visiblePrediction = prediction => prediction?.available === false ? {available:false,reason:prediction.reason,model_version:prediction.model_version,horizon_days:prediction.horizon_days,target_kind:prediction.target_kind,next_day:{available:false}} : prediction || {};
+function unqualifiedReason(stock) {
+  if(stock?.stale)return '行情过期或正在查看离线缓存，暂停新买入。';
+  if(stock?.excluded)return stock.exclusion_reason||'该股不属于可推荐范围。';
+  const risk=stock?.chase_risk;
+  if(risk?.blocked)return list(risk.reasons).map(r=>typeof r==='object'?r.detail||r.code:String(r)).filter(Boolean).join('；')||'追高风险检查未通过。';
+  if(currentPrediction(stock?.prediction) && stock?.eligible!==true)return list(stock?.warnings).map(String).join('；')||'技术规则或其他股票资格未通过；模型通过不等于可以买入。';
+  if(stock?.prediction?.reason)return stock.prediction.reason;
+  if(stock?.prediction?.model_version!=='ridge-cycle-v3')return '尚未完成当前模型与成本压力决策验证。';
+  return '技术规则、模型验证或当前数据核验未全部通过。';
+}
 const horizonLabel = prediction => Number(prediction?.horizon_days)===2?'两交易日周期':prediction?.horizon || (numeric(prediction?.horizon_days)?`${number(prediction.horizon_days,0)} 个交易日`:'两交易日周期');
 const returnBasis = prediction => !numeric(prediction?.horizon_days)||Number(prediction.horizon_days)===2?'买入日开盘 → 下一交易日收盘（研究近似）':prediction?.return_basis||prediction?.target_definition||'收益口径按该历史报告的预测期限定义';
 const percentage = (value, signed = false) => numeric(value) ? `${signed && Number(value) > 0 ? '+' : ''}${number(value)}%` : '—';
@@ -157,7 +168,8 @@ function renderStocks() {
     const p=visiblePrediction(s.prediction), expected=node('td');expected.append(node('span',`price-primary ${eligible&&Number(p.expected_return_pct)>0?'positive-text':eligible&&Number(p.expected_return_pct)<0?'negative-text':''}`,percentage(p.expected_return_pct,true)),node('span','price-sub',!eligible?'未通过预测研究 · 非推荐':numeric(p.interval_low_pct)&&numeric(p.interval_high_pct)?`${percentage(p.interval_low_pct,true)} 至 ${percentage(p.interval_high_pct,true)}`:'区间尚不可用'));tr.append(expected);
     const validation=node('td');validation.append(node('span','price-primary',numeric(p.validation_aggregate?.mae_pct)?`${number(p.validation_aggregate.mae_pct)} 个百分点` : numeric(p.validation_mae_pct)?`${number(p.validation_mae_pct)} 个百分点`:'待验证'),node('span','price-sub',p.validation_protocol_complete?`${number(p.validation_aggregate.samples,0)} 个分段验证样本`:numeric(p.validation_samples)?`${number(p.validation_samples,0)} 样本 · 分段验证不足`:'验证样本不足'));tr.append(validation);
     const score=node('td');score.append(node('span','',number(s.score,0)),node('span','price-sub','技术分 / 非概率'));tr.append(score);
-    const status=node('td');status.append(node('span',`pill ${eligible?'positive':'warn'}`,s.excluded?'排除项 · 非推荐':s.stale?'过期 / 离线 · 非推荐':s.chase_risk?.blocked?'追高风险 · 非推荐':eligible?'验证合格候选':'未通过 · 非推荐'));tr.append(status);
+    const status=node('td');status.append(node('span',`pill ${eligible?'positive':'warn'}`,s.excluded?'排除项 · 非推荐':s.stale?'过期 / 离线 · 非推荐':s.chase_risk?.blocked?'追高风险 · 非推荐':eligible?'验证合格候选':'未通过 · 非推荐'));
+    if(!eligible){const reason=unqualifiedReason(s),note=node('span','price-sub',reason.length>100?reason.slice(0,100)+'…':reason);note.title=reason;note.style.whiteSpace='normal';note.style.maxWidth='230px';status.append(note);}tr.append(status);
     const levelsEnabled=eligible && state.connected && !state.historyDate;
     tr.append(node('td','',levelsEnabled?priceRange(s):'—'));
     tr.append(node('td','',levelsEnabled?number(researchValue(s,'stop_loss')):'—'),node('td','',levelsEnabled?number(researchValue(s,'take_profit')):'—'),node('td','table-arrow',eligible?'详情 ↗':'非推荐详情 ↗'));
@@ -230,7 +242,7 @@ function renderDetail() {
   list(risk.reasons).forEach(r=>chase.append(node('p','fine-print',typeof r==='object'?r.detail||r.code||JSON.stringify(r):String(r))));
   if(valid&&ceiling&&numeric(ceiling.price))chase.append(node('p','',`最高入场研究上限：${number(ceiling.price)} 元；实际开盘或买入价高于此价则放弃。`),node('p','fine-print',`参考日期 ${ceiling.reference_date||risk.as_of_date||'—'}。09:00尚不知道实际开盘价，必须自行核对实时价；此处未核验可成交性。`));
   chase.append(node('p','fine-print',risk.scope_note||'缺少当前版本风险核验时不进入新买入候选。技术规则分不等于推荐值；涨停、连涨后仍可能大幅回撤。'));
-  renderPrediction(s.prediction, historical);
+  renderPrediction(s.prediction, historical,shortEligible(s)&&valid,unqualifiedReason(s));
   const reasons=clear($('detail-reasons'));list(s.reasons).forEach(r=>reasons.append(node('li','',typeof r==='object'?r.description||r.label||JSON.stringify(r):r)));if(s.forecast?.label)reasons.prepend(node('li','',`${s.forecast.horizon || '趋势观察'}：${s.forecast.label}。${numeric(s.forecast.up_rate_pct)?`同类历史上涨占比 ${percentage(s.forecast.up_rate_pct)}（${s.forecast.sample_count} 个重叠样本，非预测概率）。`:s.forecast.note || ''}`));if(!reasons.childNodes.length)reasons.append(node('li','','暂无足够数据生成评分依据。'));
   const factors=clear($('detail-factors'));
   const factorList=Array.isArray(s.factors)?s.factors:Object.entries(s.factors||{}).map(([name,value])=>({name,value}));
@@ -283,22 +295,38 @@ function renderTopPick(stocks) {
   text('pick-validation',`分段验证误差 ${number(p.validation_aggregate?.mae_pct??p.validation_mae_pct)} 个百分点 · ${number(p.validation_aggregate?.samples??p.validation_samples,0)} 个样本`);
 }
 
-function renderPrediction(prediction, historical) {
-  const root=clear($('detail-prediction')), p=visiblePrediction(prediction);
-  root.append(node('h3','',`${horizonLabel(p)} · 预期与验证`),node('p','prediction-basis',returnBasis(p)));
+function renderPrediction(prediction, historical,qualified=false,failureReason='') {
+  const root=clear($('detail-prediction')), p=visiblePrediction(prediction),passed=qualified&&currentPrediction(p)&&!historical;
+  const heading=node('h3','',`${horizonLabel(p)} · 模型研究诊断`);heading.append(node('span',`pill ${passed?'positive':'warn'}`,passed?'当前完整筛选通过':'未通过完整筛选 · 非推荐'));
+  root.append(heading,node('p','prediction-basis',returnBasis(p)));
+  if(!passed)root.append(node('p','fine-print',`未通过原因：${failureReason||p.reason||'当前模型、成本压力决策验证或股票资格尚未全部通过。'} 正的点估计也不能当作买入信号。`));
   const grid=node('div','prediction-grid');
-  [['预计涨幅',percentage(p.expected_return_pct,true)],['估计区间',numeric(p.interval_low_pct)&&numeric(p.interval_high_pct)?`${percentage(p.interval_low_pct,true)} 至 ${percentage(p.interval_high_pct,true)}`:'—'],['验证平均绝对误差',numeric(p.validation_mae_pct)?`${number(p.validation_mae_pct)} 个百分点`:'—'],['验证方向准确率',percentage(p.validation_direction_accuracy_pct)],['验证样本',number(p.validation_samples,0)],['训练 / 历史样本',number(p.sample_count,0)]].forEach(([label,value])=>{const box=node('div');box.append(node('span','level-label',label),node('strong','level-value',value));grid.append(box);});
+  [[passed?'模型点估计（非承诺）':'未通过的模型点估计',percentage(p.expected_return_pct,true)],['历史误差经验区间',numeric(p.interval_low_pct)&&numeric(p.interval_high_pct)?`${percentage(p.interval_low_pct,true)} 至 ${percentage(p.interval_high_pct,true)}`:'—'],['验证平均绝对误差',numeric(p.validation_mae_pct)?`${number(p.validation_mae_pct)} 个百分点`:'—'],['历史验证方向占比',percentage(p.validation_direction_accuracy_pct)],['验证样本',number(p.validation_samples,0)],['训练 / 历史样本',number(p.sample_count,0)]].forEach(([label,value])=>{const box=node('div');box.append(node('span','level-label',label),node('strong','level-value',value));grid.append(box);});
   root.append(grid);
   const evidence=node('section','nextday-summary');evidence.append(node('h3','',p.validation_protocol_complete?'分段验证与成本压力':'尚未完成当前分段验证'));
   const evidenceGrid=node('div','nextday-grid'), aggregate=p.validation_aggregate||{}, nonoverlap=p.validation_nonoverlapping||{};
   [['分段通过',Array.isArray(p.validation_folds)?`${p.validation_folds.filter(f=>f.beats_both_baselines).length} / ${p.validation_folds.length}`:'—'],['分段平均误差',numeric(aggregate.mae_pct)?`${number(aggregate.mae_pct)} 个百分点`:'—'],['零收益基准误差',numeric(aggregate.zero_baseline_mae_pct)?`${number(aggregate.zero_baseline_mae_pct)} 个百分点`:'—'],['非重叠验证样本',number(nonoverlap.samples,0)],['非重叠方向准确率',percentage(nonoverlap.direction_accuracy_pct)],['成本压力后预期',percentage(p.cost_stress_return_pct,true)]].forEach(([label,value])=>{const box=node('div');box.append(node('span','level-label',label),node('strong','level-value',value));evidenceGrid.append(box);});
   evidence.append(evidenceGrid,node('p','fine-print',p.reason||'等待完整验证证据。'),node('p','fine-print','成本压力使用每回合0.30个百分点的研究假设，并非个人实际费用。非重叠处理不能消除股票、市场与时期之间的相关性；以上均不是本次上涨概率。'));root.append(evidence);
+  const decision=p.validation_decision,diagnostic=node('section','nextday-summary');
+  diagnostic.append(node('h3','','历史成本压力决策与下行风险（研究诊断）'));
+  if(!decision || decision.protocol!=='fixed-nonoverlap-positive-net-v1')diagnostic.append(node('p','fine-print','尚无当前协议的完整决策诊断；不使用缺失记录填充收益或风险数值。'));
+  else{
+    for(const [label,metrics] of [['全部分段合并',decision.aggregate],['最近验证段',decision.latest_fold]]){
+      diagnostic.append(node('h4','',label));const values=metrics||{},g=node('div','prediction-grid');
+      [['固定机会 / 选择周期',`${number(values.samples,0)} / ${number(values.trades,0)}`],['每机会成本压力后均值',percentage(values.net_mean_per_opportunity_pct,true)],['所选周期成本压力后均值',percentage(values.net_mean_selected_pct,true)],['同网格每轮买入基准均值',percentage(values.passive_net_mean_pct,true)],['所选周期平均亏损',percentage(values.average_loss_pct,true)],['所选最差单周期',percentage(values.worst_trade_pct,true)],['所选最差10%周期均值',percentage(values.expected_shortfall_10_pct,true)],['全额再投入假设最大回撤',percentage(values.max_drawdown_pct)]].forEach(([name,value])=>{const box=node('div');box.append(node('span','level-label',name),node('strong','level-value',value));g.append(box);});diagnostic.append(g);
+    }
+    list(decision.failures).forEach(reason=>diagnostic.append(node('p','fine-print',`决策验证未通过：${String(reason)}`)));
+    diagnostic.append(node('p','fine-print',`研究成本压力每回合 ${numeric(decision.cost_stress_pct)?number(decision.cost_stress_pct):'—'} 个百分点。先固定非重叠持有周期，再按该折当时预测是否超过成本压力选择；未选择周期持现金。每机会均值使用相同机会数，与现金0及同网格每轮买入比较。`));
+    diagnostic.append(node('p','fine-print',decision.comparison_basis||'被动基准在每个固定网格周期均买入，并非连续持仓。'));
+    diagnostic.append(node('p','fine-print',decision.tail_basis||'最差10%均值来自已选择周期的历史成本压力收益；不是未来损失上界。'));
+    diagnostic.append(node('p','fine-print',`${decision.execution_note||'未模拟涨跌停无法成交、滑点差异或研究区间未成交。'} 这些是历史研究诊断，不能当作实盘净收益、未来收益概率或风险保证。`));
+  }root.append(diagnostic);
   const next=p.next_day || {},nextSummary=node('section','nextday-summary'),nextHeading=node('h3');
   const nextAvailable=next.available!==false && numeric(next.expected_return_pct);
-  nextHeading.append(document.createTextNode('下一交易日 · 预测摘要'),node('span',`pill ${next.eligible===true?'positive':'warn'}`,next.eligible===true?'通过研究筛选':nextAvailable?'未通过预测筛选':'样本不足 / 暂不可用'));nextSummary.append(nextHeading);
+  nextHeading.append(document.createTextNode('下一交易日 · 辅助研究诊断'),node('span','pill warn',nextAvailable?'辅助研究 · 不构成买入建议':'样本不足 / 暂不可用'));nextSummary.append(nextHeading);
   const nextGrid=node('div','nextday-grid');
   [['次日预期涨幅',nextAvailable?percentage(next.expected_return_pct,true):'—'],['经验区间',nextAvailable&&numeric(next.interval_low_pct)&&numeric(next.interval_high_pct)?`${percentage(next.interval_low_pct,true)} 至 ${percentage(next.interval_high_pct,true)}`:'—'],['验证 MAE',numeric(next.validation_mae_pct)?`${number(next.validation_mae_pct)} 个百分点`:'—'],['验证样本数',number(next.validation_samples,0)]].forEach(([label,value])=>{const box=node('div');box.append(node('span','level-label',label),node('strong','level-value',value));nextGrid.append(box);});
-  nextSummary.append(nextGrid,node('p','fine-print',next.reason || (next.eligible===true?`次日预测独立通过研究筛选；首页按${horizonLabel(p)}的综合值排名。`:'次日预测尚未通过验证或样本不足，暂不据此生成买入建议。')));root.append(nextSummary);
+  nextSummary.append(nextGrid,node('p','fine-print',next.reason || '次日预测仅作辅助研究，不据此生成主周期买入建议。'));root.append(nextSummary);
   root.append(node('p','fine-print',`${p.method || '预测尚未完成验证。'} ${historical?'当前展示历史快照中的预测信息。':''} 预计涨幅有估计误差；验证方向准确率仅描述历史验证样本，不代表本次上涨概率。经验区间未校准覆盖概率，不保证覆盖实际收益。`));
 }
 
@@ -359,14 +387,39 @@ async function loadDailyPlan() {
   }catch(error){clearPlanBuy('当日日报加载失败，无法核验有效买入候选；请重试读取。');$('daily-plan-alert').hidden=false;text('daily-plan-alert',`每日研究计划暂不可用：${error.message}。新买入资格已取消；既有卖出跟踪仅为上次记录，请核对报告日期。`);}finally{button.disabled=false;}
 }
 
+function renderAIReview(review) {
+  const root=clear($('ai-review-status'));root.append(node('h3','','云端AI风险复核'));
+  if(!review || typeof review!=='object'){
+    root.append(node('p','','尚未读取云端复核记录'),node('p','fine-print','此处显示已取得的真实记录。请刷新信息后核对状态。'));return;
+  }
+  const passed=review.status==='complete' && review.valid===true && review.morning_qualified===true;
+  const labels={missing:'待记录',invalid:'校验失败',partial:'未完成',late:'迟到，仅复盘',unavailable:'不可用'};
+  const label=passed?'盘前复核记录已通过校验':labels[review.status]||(review.status==='complete'?(review.valid===false?'校验失败':'未完成'):'待核验');
+  root.append(node('span',`pill ${passed?'positive':'warn'}`,label));
+  if(review.date || review.signal_date)root.append(node('p','fine-print',`复核日期：${review.date||'—'} · 对应行情日：${review.signal_date||'—'}`));
+  if(typeof review.summary==='string' && review.summary.trim())root.append(node('p','',`记录摘要：${review.summary}`));
+  if(typeof review.scope==='string' && review.scope.trim())root.append(node('p','fine-print',`核验范围：${review.scope}`));
+  if(numeric(review.reviewed_count)||numeric(review.veto_count))root.append(node('p','fine-print',`记录列明复核 ${number(review.reviewed_count,0)} 只 · 风险否决 ${number(review.veto_count,0)} 只`));
+  list(review.errors).filter(error=>typeof error==='string'&&error.trim()).forEach(error=>root.append(node('p','fine-print',`记录问题：${error}`)));
+  if(review.checked_at)root.append(node('p','fine-print',`记录校验时间：${shortTime(review.checked_at)} · 北京时间`));
+  try{
+    const url=new URL(review.run_url);
+    if(url.protocol==='https:' && url.hostname==='chatgpt.com' && !url.username && !url.password && (!url.port||url.port==='443') && !url.hash && url.pathname!=='/' && ![...url.searchParams.keys()].some(key=>/token|password|secret|cookie|authorization|api.?key/i.test(key))){
+      const link=node('a','text-button',review.run_url_scope==='task_run'?'查看本次复核记录 ↗':'查看复核任务对话 ↗');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';root.append(link);
+    }
+  }catch{}
+  root.append(node('p','fine-print','AI复核只能补充风险或否决候选，不能把未通过模型、数据或追高检查的股票变成买入建议。状态只反映记录校验，不证明公告正文全部核验、任务准点完成或使用了指定模型。'));
+}
+
 async function loadSystem() {
   const button=$('system-refresh');button.disabled=true;
   try {
     const result=await api('/api/system'),v=typeof result.version==='object'?result.version:result;$('system-alert').hidden=true;text('system-version',v.version);text('system-schema',v.data_schema_version);text('system-project-id',v.project_id);text('system-project-path',result.project_path|| (result.hosted?'云端托管':'未提供'));
+    renderAIReview(result.ai_review);
     const migration=result.migration||{};text('migration-status',migration.message||migration.description||migration.status||'请按迁移说明备份数据，再在目标环境恢复并核对版本。');
     const backup=migration.backup_command||migration.commands?.backup,restore=migration.restore_command||migration.commands?.restore;
     text('migration-backup-command',backup||'备份命令由部署环境的迁移说明提供');text('migration-restore-command',restore);$('migration-restore-wrap').hidden=!restore;
-  }catch(error){$('system-alert').hidden=false;text('system-alert',`暂未取得版本与迁移信息：${error.message}。请以部署环境中的迁移说明为准。`);}finally{button.disabled=false;}
+  }catch(error){renderAIReview({status:'unavailable',summary:'暂时无法读取云端复核记录，请重新刷新信息。'});$('system-alert').hidden=false;text('system-alert',`暂未取得版本与迁移信息：${error.message}。请以部署环境中的迁移说明为准。`);}finally{button.disabled=false;}
 }
 
 $('show-unqualified').checked=false;$('show-excluded').checked=false;

@@ -22,10 +22,18 @@ def public_dashboard(value):
     prediction_keys = {'available','eligible','horizon_days','horizon','return_basis','return_definition',
                        'expected_return_pct','interval_low_pct','interval_high_pct','validation_mae_pct',
                        'validation_samples','rank_value','raw_rank_value','model_version','validation_protocol',
-                       'validation_protocol_complete','validation_aggregate','cost_stress_return_pct','round_trip_cost_stress_pct'}
+                       'validation_protocol_complete','validation_aggregate','validation_nonoverlapping',
+                       'validation_decision','reason','cost_stress_return_pct','round_trip_cost_stress_pct'}
     result['stocks'] = [{**{k:v for k,v in s.items() if k in table_keys},
         'prediction':{k:v for k,v in (s.get('prediction') or {}).items() if k in prediction_keys}}
         for s in result.get('stocks') or []]
+    decision_keys = {'protocol','eligible','failures','cost_stress_pct','minimum_trades','minimum_latest_trades',
+                     'aggregate','latest_fold'}
+    for stock in result['stocks']:
+        decision = stock['prediction'].get('validation_decision')
+        if isinstance(decision, dict):
+            stock['prediction']['validation_decision'] = {k: copy.deepcopy(v) for k,v in decision.items()
+                                                         if k in decision_keys}
     result['meta'] = {k: copy.deepcopy(v) for k,v in value.get('meta',{}).items() if k in META_KEYS}
     result['meta'].update(hosted=True, is_trading=False, hosting='github-pages',
         schedule='北京时间交易日08:00采集、09:00发布（GitHub Actions可能延迟；以实际报告时间为准）')
@@ -89,7 +97,9 @@ def export_site(output_dir, service, engine_dir=None):
     write('data/longterm.json',service.longterm())
     write('data/quotes.json',{'quotes':[], 'status':'GitHub Pages 为收盘研究快照，不提供实时或盘中自动报价。'})
     write('data/config.json',{'hosted':True,'universe':'shanghai','watchlist':[],'refresh_minutes':5})
+    from ai_review import public_status
     write('data/system.json',{'version':version,'hosted':True,'project_path':'GitHub / Dopagip00/gup',
+        'ai_review':public_status(core.getkv('ai_review',{})),
         'migration':{'message':'新电脑下载仓库即可继续开发；本机研究数据请使用完整迁移包。云端最近研究状态在 Actions artifact，公开快照在本网站。',
                      'backup_command':'git clone https://github.com/Dopagip00/gup.git'}})
     reports = service.reports()

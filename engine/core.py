@@ -109,6 +109,132 @@ def chase_gate(stock, target):
     return stock
 
 
+def decision_validation_failures(prediction, target):
+    """Recheck stored decision evidence, not its saved eligibility flag alone.
+
+    Date ordering, fold membership, selection and cost arithmetic are checked
+    here independently. The pure forecast metrics reducer is reused only after
+    rebuilding those verified opportunities; no data, reports or orders change.
+    """
+    p = prediction if isinstance(prediction, dict) else {}
+    decision, folds = p.get('validation_decision'), p.get('validation_folds')
+    nonoverlap = p.get('validation_nonoverlapping')
+
+    def finite(value):
+        try:
+            return type(value) in (int, float) and math.isfinite(value)
+        except OverflowError:
+            return False
+
+    def day(value):
+        if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+            return None
+        try:
+            return dt.date.fromisoformat(value)
+        except ValueError:
+            return None
+
+    def failed(detail):
+        return ['成本压力决策验证证据无效：' + detail]
+
+    cost = forecast.ROUND_TRIP_COST_STRESS_PCT
+    if not isinstance(decision, dict) or decision.get('protocol') != forecast.DECISION_PROTOCOL:
+        return failed('缺少当前固定非重叠决策协议')
+    if (decision.get('eligible') is not True or decision.get('selection_rule') != 'fold_out_of_fit_estimate_gt_cost'
+            or not finite(decision.get('cost_stress_pct')) or decision['cost_stress_pct'] != cost
+            or type(decision.get('minimum_trades')) is not int or decision['minimum_trades'] != forecast.MIN_DECISION_TRADES
+            or type(decision.get('minimum_latest_trades')) is not int or decision['minimum_latest_trades'] != forecast.MIN_LATEST_DECISION_TRADES
+            or decision.get('failures') != []):
+        return failed('协议标记、成本或固定30/10选择样本门槛不一致')
+    if not isinstance(folds, list) or len(folds) != forecast.VALIDATION_FOLDS or day(target) is None:
+        return failed('缺少完整三段验证日期')
+    bounds = {}
+    previous_fold_end = None
+    for position, fold in enumerate(folds, 1):
+        if not isinstance(fold, dict) or type(fold.get('fold')) is not int or fold['fold'] != position:
+            return failed('验证段编号无效')
+        training, first, last, label = [day(fold.get(key)) for key in
+                                       ('training_label_end', 'feature_start', 'feature_end', 'label_end')]
+        if not (all((training, first, last, label)) and training < first <= last < label <= day(target)
+                and (previous_fold_end is None or previous_fold_end < first)
+                and type(fold.get('samples')) is int and fold['samples'] == forecast.HOLDOUT):
+            return failed('验证段日期或样本数无效')
+        bounds[position] = (training, first, last, label)
+        previous_fold_end = last
+    opportunities = decision.get('opportunities')
+    if (not isinstance(opportunities, list) or not isinstance(nonoverlap, dict)
+            or type(nonoverlap.get('samples')) is not int
+            or not 90 <= nonoverlap['samples'] <= forecast.HOLDOUT * forecast.VALIDATION_FOLDS
+            or len(opportunities) != nonoverlap['samples']):
+        return failed('完整机会网格数量与非重叠验证样本数不一致')
+    checked, prior_feature, prior_exit, prior_fold = [], None, None, 0
+    for item in opportunities:
+        if not isinstance(item, dict) or type(item.get('fold')) is not int or item['fold'] not in bounds:
+            return failed('机会所属验证段无效')
+        fold = item['fold']
+        feature, entry, exit_day = [day(item.get(key)) for key in ('feature_date', 'entry_date', 'exit_date')]
+        training, first, last, label = bounds[fold]
+        if not (all((feature, entry, exit_day)) and training < first <= feature <= last
+                and feature < entry < exit_day <= label <= day(target)
+                and (prior_feature is None or prior_feature < feature)
+                and (prior_exit is None or prior_exit < entry) and prior_fold <= fold):
+            return failed('机会日期穿越、重叠、重复、段落错配或顺序不正确')
+        numeric = ('estimate_pct', 'gross_return_pct', 'net_return_pct', 'passive_net_return_pct')
+        if any(not finite(item.get(key)) for key in numeric) or type(item.get('selected')) is not bool:
+            return failed('机会收益或选择标记包含缺失、布尔数值或非有限数')
+        selected = item['estimate_pct'] > cost
+        passive = item['gross_return_pct'] - cost
+        net = passive if selected else 0.0
+        if (item['selected'] is not selected or abs(item['passive_net_return_pct'] - passive) > 1e-8
+                or abs(item['net_return_pct'] - net) > 1e-8):
+            return failed('机会选择不是当时预测严格大于成本，或成本/现金收益算数不一致')
+        checked.append({'fold': fold, 'selected': selected, 'net_return_pct': net,
+                        'passive_net_return_pct': passive})
+        prior_feature, prior_exit, prior_fold = feature, exit_day, fold
+    if {item['fold'] for item in checked} != set(bounds):
+        return failed('完整机会网格缺少验证段')
+    if any(sum(item['fold'] == fold for item in checked) > forecast.HOLDOUT for fold in bounds):
+        return failed('单段机会网格样本数超过该段验证样本数')
+    try:
+        aggregate = forecast._decision_metrics(checked)
+        by_fold = [{'fold': fold, **forecast._decision_metrics([item for item in checked if item['fold'] == fold])}
+                   for fold in bounds]
+    except (ArithmeticError, TypeError, ValueError):
+        return failed('不能从机会原始记录重算收益与回撤')
+
+    def matches(saved, actual):
+        if not isinstance(saved, dict) or set(saved) != set(actual):
+            return False
+        for key, expected in actual.items():
+            value = saved[key]
+            if expected is None:
+                if value is not None:
+                    return False
+            elif type(expected) is bool:
+                if value is not expected:
+                    return False
+            elif type(expected) is int:
+                if type(value) is not int or value != expected:
+                    return False
+            elif not (finite(value) and finite(expected) and abs(value - expected) <= 1e-7):
+                return False
+        return True
+
+    saved_folds = decision.get('folds')
+    if (not matches(decision.get('aggregate'), aggregate) or not matches(decision.get('latest_fold'), by_fold[-1])
+            or not isinstance(saved_folds, list) or len(saved_folds) != len(by_fold)
+            or any(not matches(saved, actual) for saved, actual in zip(saved_folds, by_fold))):
+        return failed('汇总、最近段或分段的样本/收益/复合/尾部/回撤与原始机会记录不一致')
+    latest = by_fold[-1]
+    if aggregate['trades'] < forecast.MIN_DECISION_TRADES or latest['trades'] < forecast.MIN_LATEST_DECISION_TRADES:
+        return failed('独立重算的汇总或最近段选择周期不足固定30/10门槛')
+    if any(not (metrics['net_mean_per_opportunity_pct'] > 0
+                and metrics['net_mean_per_opportunity_pct'] > metrics['passive_net_mean_pct'])
+           for metrics in (aggregate, latest)):
+        return failed('独立重算的成本压力后每机会收益未在汇总及最近段同时胜过现金0与同网格每轮买入基准')
+    return []
+
+
 def prediction_failures(prediction, target):
     """A saved eligibility flag cannot authorize a new recommendation by itself."""
     p = prediction if isinstance(prediction, dict) else {}
@@ -122,7 +248,10 @@ def prediction_failures(prediction, target):
     if p.get('session_alignment') != 'benchmark_sessions' or p.get('latest_feature_window_aligned') is not True:
         failures.append('预测缺少连续基准交易日对齐证明')
     def number(value, positive=False):
-        return type(value) in (int, float) and math.isfinite(value) and (value > 0 if positive else value >= 0)
+        try:
+            return type(value) in (int, float) and math.isfinite(value) and (value > 0 if positive else value >= 0)
+        except OverflowError:
+            return False
     def day(value):
         try:
             return dt.date.fromisoformat(value)
@@ -165,13 +294,17 @@ def prediction_failures(prediction, target):
         failures.append('三段验证的日期、样本数或双基准证据不完整，不能仅凭合格标记推荐')
     for key in ('expected_return_pct', 'rank_value', 'cost_stress_return_pct'):
         value = p.get(key)
-        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+        if not number(value, True):
             failures.append('预测、成本压力或排名值无效')
             break
     expected, stressed, cost = (p.get(key) for key in ('expected_return_pct', 'cost_stress_return_pct', 'round_trip_cost_stress_pct'))
     if not (number(expected, True) and number(stressed, True) and number(cost, True) and
             cost == forecast.ROUND_TRIP_COST_STRESS_PCT and abs(expected - stressed - cost) <= .002):
         failures.append('成本压力假设或扣减数值不一致')
+    z = p.get('current_feature_max_abs_z')
+    if not (number(z) and z <= 4):
+        failures.append('当前特征标准差偏离证据缺失、非有限或超过4个标准差')
+    failures.extend(decision_validation_failures(p, target))
     return failures
 
 

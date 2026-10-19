@@ -14,11 +14,12 @@ import re
 import sqlite3
 import sys
 import tempfile
+from ai_review import load_review as load_ai_review
 
 TZ = dt.timezone(dt.timedelta(hours=8))
 ROOT = Path(__file__).resolve().parent
 PUBLIC_TABLES = ('securities', 'histories', 'signals', 'runs')
-PUBLIC_KEYS = {'universe_info', 'last_success', 'last_completed', 'valuation_quotes', 'longterm',
+PUBLIC_KEYS = {'ai_review', 'universe_info', 'last_success', 'last_completed', 'valuation_quotes', 'longterm',
                'morning_news', 'quotes', 'github_collect', 'github_publish', 'github_fundamentals', 'github_run_status', 'model_recalculation'}
 PUBLIC_SCHEMA = {
     'securities': ('symbol', 'name', 'active'),
@@ -28,7 +29,9 @@ PUBLIC_SCHEMA = {
 }
 MAX_SEED_BYTES = 700 * 1024 * 1024
 SEED_PART_BYTES = 4 * 1024 * 1024
-MAX_SEED_COMPRESSED_BYTES = 95 * 1024 * 1024
+# V3 retains bounded per-cycle decision evidence. Raw JSON still has the
+# independent 700 MiB ceiling; each GitHub source part remains only 4 MiB.
+MAX_SEED_COMPRESSED_BYTES = 128 * 1024 * 1024
 MAX_PLANS_BYTES = 64 * 1024 * 1024
 
 
@@ -421,6 +424,8 @@ def run_stage(stage, core, service):
         return dict(result, status='closed', reason='上交所官方日历休市，跳过采集与新推荐')
     target = core.md.last_completed_session(moment.replace(hour=9, minute=0, second=0, microsecond=0))
     result['target_date'] = target
+    if stage in ('collect','publish'):
+        core.putkv('ai_review', load_ai_review(ROOT, now=moment, signal_date=target))
     if stage == 'collect':
         if moment.time().replace(tzinfo=None) < dt.time(8):
             return dict(result, status='skipped', reason='尚未到北京时间08:00')

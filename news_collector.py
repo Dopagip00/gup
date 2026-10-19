@@ -31,6 +31,11 @@ SSE_API = 'https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do'
 CCTV_PAGE = 'https://finance.cctv.com/'
 LOOKBACK_DAYS = 4
 MAX_LOOKBACK_DAYS = 31
+VERIFICATION_PROTOCOL = 'official-sources-v3-risk31-v1'
+RISK_PROTOCOL = 'sse-risk-title-observation-v1'
+RISK_LOOKBACK_DAYS = 31
+RISK_QUERIES = ('股票交易', '停牌', '复牌', '立案', '风险警示', '终止上市', '退市整理', '债务逾期', '无法按期偿还')
+RISK_SEMANTICS = 'rolling_research_observation_not_risk_resolution'
 PAGE_SIZE = 100
 MAX_PAGES = 80
 MAX_ARTICLES = 16
@@ -147,6 +152,14 @@ def _rows(value):
             raise NewsError('SSE announcement row has an unknown format')
 
 
+def _pagination_integer(value):
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and re.fullmatch(r'\d+', value):
+        return int(value)
+    raise ValueError('pagination count is not an integer')
+
+
 def parse_announcements(payload, moment, window_start=None):
     """Parse the official grouped JSON, preserving date-only source precision."""
     moment = _moment(moment)
@@ -178,7 +191,7 @@ def parse_announcements(payload, moment, window_start=None):
     return items, invalid
 
 
-def _sse(moment, window_start=None):
+def _sse(moment, window_start=None, *, title_query=''):
     start = _coverage_start(moment, window_start).isoformat()
     items, groups, total, pages, invalid = [], 0, None, 0, 0
     page_fingerprints, group_fingerprints = set(), set()
@@ -187,18 +200,26 @@ def _sse(moment, window_start=None):
                   'pageHelp.pageNo': page, 'pageHelp.beginPage': page,
                   'pageHelp.endPage': page, 'pageHelp.cacheSize': 1,
                   'START_DATE': start, 'END_DATE': moment.date().isoformat(),
-                  'SECURITY_CODE': '', 'TITLE': '', 'BULLETIN_TYPE': '', 'stockType': ''}
+                  'SECURITY_CODE': '', 'TITLE': title_query, 'BULLETIN_TYPE': '', 'stockType': ''}
         try:
             payload = json.loads(_get(SSE_API + '?' + urllib.parse.urlencode(params), SSE_PAGE))
         except (json.JSONDecodeError, TypeError) as exc:
             raise NewsError('SSE returned invalid JSON') from exc
         part, bad = parse_announcements(payload, moment, start)
+        if title_query:
+            # The official API filters groups, and may attach an unrelated
+            # companion document to a matching group. Every group must match;
+            # only matching documents belong to this declared title search.
+            if any(not any(title_query in str(row.get('TITLE') or '') for row in _rows([group]))
+                   for group in payload['result']):
+                raise NewsError('SSE did not honor the risk title filter')
+            part = [item for item in part if title_query in item['title']]
         info = payload.get('pageHelp')
         if not isinstance(info, dict):
             raise NewsError('SSE pagination metadata is missing')
         try:
-            reported_total = int(info['total'])
-            reported_page = int(info['pageNo'])
+            reported_total = _pagination_integer(info['total'])
+            reported_page = _pagination_integer(info['pageNo'])
         except (KeyError, ValueError, TypeError, OverflowError) as exc:
             raise NewsError('SSE pagination metadata is invalid') from exc
         if reported_total < 0 or reported_page != page:
@@ -236,7 +257,47 @@ def _sse(moment, window_start=None):
     return items, {'source': '上海证券交易所·上市公司公告', 'url': SSE_PAGE, 'status': 'complete',
                    'window_start': start, 'window_end': moment.date().isoformat(),
                    'groups_scanned': groups, 'groups_total': total, 'pages': pages,
+                   'title_query': title_query,
                    'accepted_items': len(items), 'scope': '沪市A股公告目录标题；不表示已读取每份公告正文'}
+
+
+def _risk_window(moment, *, fixed_observed=None):
+    """Scan every page of nine declared official title searches over 31 days.
+
+    This is a rolling research observation window, not an issuer risk lifetime.
+    Neither a later resumption/removal title nor leaving the window proves that
+    a previous risk has ended. No PDF-body interpretation is performed.
+    """
+    start = (moment.date() - dt.timedelta(days=RISK_LOOKBACK_DAYS)).isoformat()
+    receipts, by_url = [], {}
+    for keyword in RISK_QUERIES:
+        try:
+            items, receipt = _sse(moment, start, title_query=keyword)
+            if not isinstance(receipt, dict) or receipt.get('status') != 'complete':
+                raise NewsError('risk title query did not produce a complete receipt')
+        except NewsError as exc:
+            raise NewsError('31-day SSE risk query [' + keyword + '] incomplete: ' + str(exc)) from exc
+        observed = fixed_observed or _moment()
+        receipt = dict(receipt, keyword=keyword, source_url=SSE_PAGE, title_query=keyword,
+                       window_start=start, window_end=moment.date().isoformat(), observed_at=observed.isoformat())
+        receipts.append(receipt)
+        for item in items:
+            item = dict(item, source_url=SSE_PAGE, observed_at=observed.isoformat(), query_keyword=keyword)
+            original = by_url.get(item['url'])
+            if original and any(original.get(key) != item.get(key) for key in ('symbol', 'title', 'published_at')):
+                raise NewsError('SSE risk queries returned conflicting announcement identities')
+            by_url[item['url']] = item
+    items = sorted(by_url.values(), key=lambda item: item['published_at'], reverse=True)
+    risks = risk_exclusions(items)
+    for risk in risks:
+        risk.update(observation_status='research_window_veto', resolution_status='not_determined',
+                    observation_window_start=start, observation_window_end=moment.date().isoformat())
+    return {'protocol': RISK_PROTOCOL, 'status': 'complete', 'source_url': SSE_PAGE,
+            'window_start': start, 'window_end': moment.date().isoformat(), 'lookback_days': RISK_LOOKBACK_DAYS,
+            'observed_at': (fixed_observed or _moment()).isoformat(), 'queries': receipts,
+            'items_scanned': len(items), 'risk_exclusions': risks, 'semantics': RISK_SEMANTICS,
+            'scope': '固定9项标题关键词的沪市A股官方公告目录完整分页；不是全部潜在风险或PDF正文核验。',
+            'expiry_note': '31天仅为滚动研究观察窗口；未自动判定风险解除。窗口外不表示安全，复牌/撤销标题也不自动解除此前观察。'}
 
 
 class _Links(HTMLParser):
@@ -331,7 +392,8 @@ def risk_exclusions(items):
     """Conservative vetoes from explicit official titles and structured codes.
 
     A macro headline or a guessed company-name match never creates a stock tag.
-    A bare resumption/removal title is not continuing risk.  A title about a
+    A bare resumption/removal title does not create a new risk tag or automatically
+    release a previous event in the observation window. A title about a
     suspension, delay of resumption or an application to remove a warning is
     still a veto until the original document has been reviewed.
     This is a prompt for human review, not a finding from the unread PDF body.
@@ -341,7 +403,9 @@ def risk_exclusions(items):
         if item.get('kind') != 'announcement' or not re.fullmatch(r'sh(?:60\d{4}|68\d{4})', str(item.get('symbol', ''))):
             continue
         title = item.get('title', '')
-        checks = [('停牌', bool(re.search(r'停牌|(?:延期|暂缓|无法|不予|未能|不能|未获).{0,5}复牌', title)) and not re.search(r'(?:不|无需)停牌', title)),
+        checks = [('股票交易异常波动', bool(re.search(r'股票交易.{0,8}(?:异常波动|严重异常)', title))),
+                  ('股票交易风险提示', bool(re.search(r'股票交易.{0,8}风险提示', title))),
+                  ('停牌', bool(re.search(r'停牌|(?:延期|暂缓|无法|不予|未能|不能|未获).{0,5}复牌', title)) and not re.search(r'(?:不|无需)停牌', title)),
                   ('立案调查', bool(re.search(r'(?:立案调查|立案告知书|被.{0,24}立案)', title))),
                   ('实施风险警示', bool(re.search(r'(?:实施|被实施)(?:退市|其他)风险警示', title))),
                   ('风险警示待撤销', bool(re.search(r'(?:申请|拟申请)(?:撤销|解除)(?:退市|其他)风险警示', title))),
@@ -352,7 +416,10 @@ def risk_exclusions(items):
         if matched:
             risks.append({'symbol': item['symbol'], 'reason': '官方公告标题涉及' + '、'.join(matched) + '，暂停新买入并人工复核原文。',
                           'title': title, 'url': item['url'], 'published_at': item['published_at'],
-                          'source': item['source'], 'evidence_scope': '公告目录标题及证券代码；未分析PDF正文'})
+                          'published_precision': item.get('published_precision'),
+                          'source': item['source'], 'source_url': item.get('source_url', SSE_PAGE),
+                          'observed_at': item.get('observed_at'), 'query_keyword': item.get('query_keyword'),
+                          'evidence_scope': '公告目录标题及证券代码；未分析PDF正文'})
     return risks
 
 
@@ -363,6 +430,7 @@ def collect(now=None, *, coverage_start=None):
     record = {'date': moment.date().isoformat(), 'as_of': moment.isoformat(),
               'collection_started_at': moment.isoformat(),
               'window_start': start, 'window_end': moment.date().isoformat(),
+              'verification_protocol': VERIFICATION_PROTOCOL,
               'timezone': 'Asia/Shanghai', 'status': 'unavailable', 'items': [],
               'risk_exclusions': [], 'errors': [], 'sources': [],
               'verification_scope': '来源与发布时间解析核验，不代表已独立核实全部报道事实或已阅读全部公告正文。',
@@ -384,6 +452,17 @@ def collect(now=None, *, coverage_start=None):
         except NewsError as exc:
             record['errors'].append(name + '：' + str(exc))
             record['sources'].append({'source': name, 'url': url, 'status': 'failed', 'error': str(exc)})
+    try:
+        monitoring = _risk_window(moment, fixed_observed=moment if now is not None else None)
+        if monitoring.get('status') != 'complete':
+            raise NewsError('31-day risk observation did not complete')
+        record['risk_monitoring'] = monitoring
+    except NewsError as exc:
+        record['risk_monitoring'] = {'protocol': RISK_PROTOCOL, 'status': 'failed', 'source_url': SSE_PAGE,
+            'window_start': (moment.date() - dt.timedelta(days=RISK_LOOKBACK_DAYS)).isoformat(),
+            'window_end': moment.date().isoformat(), 'lookback_days': RISK_LOOKBACK_DAYS,
+            'semantics': RISK_SEMANTICS, 'error': str(exc)}
+        record['errors'].append('上交所31天风险研究观察窗口：' + str(exc))
     # In production use completion time; passing now is an explicit deterministic
     # replay/testing boundary, never a fabricated successful earlier timestamp.
     finished = _moment() if now is None else moment
@@ -392,7 +471,10 @@ def collect(now=None, *, coverage_start=None):
         record['errors'].append('采集完成已超出当日盘前窗口，不能作为今日新买入核验。')
     unique = {item['url']: item for item in all_items}
     all_items = sorted(unique.values(), key=lambda item: item['published_at'], reverse=True)
-    record['risk_exclusions'] = risk_exclusions(all_items)
+    recent_risks = risk_exclusions(all_items)
+    monitoring_risks = record['risk_monitoring'].get('risk_exclusions', [])
+    record['risk_exclusions'] = list({(risk['symbol'], risk['url']): risk
+                                    for risk in recent_risks + monitoring_risks}.values())
     # Display both source types even on heavy announcement days.  Risk screening
     # covers the complete successfully scanned list before this display cap.
     market = [item for item in all_items if item['kind'] == 'market_news']

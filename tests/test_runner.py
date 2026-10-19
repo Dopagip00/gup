@@ -31,6 +31,7 @@ def make_db(path):
 
 
 class FakeCore:
+    encode=staticmethod(lambda value:json.dumps(value,ensure_ascii=False,separators=(',',':'),allow_nan=False))
     def __init__(self, moment=None, database=None):
         self.values={}; self.database=database
         self.now=lambda: moment or dt.datetime(2026,10,19,8,30,tzinfo=runner.TZ)
@@ -130,6 +131,14 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(runner.run_stage('collect',core,service)['status'],'closed')
             self.assertEqual(runner.run_stage('publish',core,service)['status'],'closed')
             news.assert_not_called();service.refresh.assert_not_called()
+
+    def test_runner_reads_ai_review_from_original_repository_before_publish(self):
+        core=FakeCore(dt.datetime(2026,10,19,9,tzinfo=runner.TZ));receipt={'status':'missing','valid':False}
+        with patch.object(runner,'load_ai_review',return_value=receipt) as load,patch.object(runner,'collect_news'),patch.object(runner.importlib,'import_module',return_value=types.SimpleNamespace(publish=lambda:{'status':'pending'})):
+            result=runner.run_stage('publish',core,Mock())
+        load.assert_called_once_with(runner.ROOT,now=core.now(),signal_date='2026-10-16')
+        self.assertEqual(core.getkv('ai_review'),receipt);self.assertEqual(result['status'],'pending')
+        self.assertTrue(runner.public_key('ai_review'))
 
     def test_news_precedes_cached_market_research_and_preserves_real_completion_time(self):
         core=FakeCore();old={'target_date':'2026-10-16','finished_at':'2026-10-16T16:00:00+08:00'};core.putkv('last_success',old)

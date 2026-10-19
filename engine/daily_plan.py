@@ -2,6 +2,7 @@
 from __future__ import annotations
 import datetime as dt
 import math
+import re
 from urllib.parse import urlsplit
 import core
 import market_data as md
@@ -12,6 +13,12 @@ NEWS_SOURCES = {
     'https://finance.cctv.com/': ('央视网财经', {'finance.cctv.com'}),
 }
 SESSION_RISK_SOURCE = 'https://www.sse.com.cn/disclosure/dealinstruc/suspension/stock/'
+NEWS_VERIFICATION_PROTOCOL = 'official-sources-v3-risk31-v1'
+RISK_PROTOCOL = 'sse-risk-title-observation-v1'
+RISK_QUERIES = ('股票交易', '停牌', '复牌', '立案', '风险警示', '终止上市', '退市整理', '债务逾期', '无法按期偿还')
+RISK_SEMANTICS = 'rolling_research_observation_not_risk_resolution'
+ANNOUNCEMENT_SOURCE = 'https://www.sse.com.cn/disclosure/listedinfo/announcement/'
+AI_PROTOCOL = 'cloud-ai-risk-review-v1'
 
 
 def session_after(day):
@@ -42,6 +49,71 @@ def _instant(value):
         return None
 
 
+def _publication_boundary(item):
+    """Compare an explicitly date-only official disclosure without inventing a timestamp."""
+    value = item.get('published_at')
+    if item.get('published_precision') == 'date' and isinstance(value, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        try:
+            return dt.datetime.combine(dt.date.fromisoformat(value), dt.time(), core.TZ)
+        except ValueError:
+            return None
+    return _instant(value)
+
+
+def _risk_observation_ready(moment, begun, fetched, monitoring):
+    if not isinstance(monitoring, dict):
+        return False
+    window = (moment.date() - dt.timedelta(days=31)).isoformat()
+    observed = _instant(monitoring.get('observed_at'))
+    if not (monitoring.get('protocol') == RISK_PROTOCOL and monitoring.get('status') == 'complete' and
+            monitoring.get('source_url') == ANNOUNCEMENT_SOURCE and monitoring.get('window_start') == window and
+            monitoring.get('window_end') == moment.date().isoformat() and
+            type(monitoring.get('lookback_days')) is int and monitoring['lookback_days'] == 31 and
+            monitoring.get('semantics') == RISK_SEMANTICS and observed and begun <= observed <= fetched):
+        return False
+    queries = monitoring.get('queries')
+    if not isinstance(queries, list) or len(queries) != len(RISK_QUERIES):
+        return False
+    receipts = {}
+    for query in queries:
+        if not isinstance(query, dict) or query.get('keyword') not in RISK_QUERIES or query['keyword'] in receipts:
+            return False
+        stamp = _instant(query.get('observed_at'))
+        total, scanned, pages = (query.get(key) for key in ('groups_total', 'groups_scanned', 'pages'))
+        if not (query.get('status') == 'complete' and query.get('source_url') == ANNOUNCEMENT_SOURCE and
+                query.get('url') == ANNOUNCEMENT_SOURCE and query.get('title_query') == query['keyword'] and
+                query.get('window_start') == window and query.get('window_end') == moment.date().isoformat() and
+                type(total) is int and type(scanned) is int and total >= 0 and scanned == total and
+                type(pages) is int and pages == max(1, (total + 99) // 100) and pages <= 80 and
+                stamp and begun <= stamp <= observed):
+            return False
+        receipts[query['keyword']] = stamp
+    events, scanned = monitoring.get('risk_exclusions'), monitoring.get('items_scanned')
+    if not (isinstance(events, list) and type(scanned) is int and scanned >= len(events)):
+        return False
+    for event in events:
+        if not isinstance(event, dict):
+            return False
+        try:
+            url = urlsplit(str(event.get('url', '')))
+            published = _publication_boundary(event)
+            event_observed = _instant(event.get('observed_at'))
+            query = event.get('query_keyword')
+            if not (re.fullmatch(r'sh(?:60\d{4}|68\d{4})', str(event.get('symbol', ''))) and
+                    isinstance(event.get('title'), str) and event['title'] and query in receipts and query in event['title'] and
+                    event.get('source') == NEWS_SOURCES[ANNOUNCEMENT_SOURCE][0] and
+                    event.get('source_url') == ANNOUNCEMENT_SOURCE and url.scheme == 'https' and
+                    url.hostname in NEWS_SOURCES[ANNOUNCEMENT_SOURCE][1] and not url.username and not url.password and
+                    url.port in (None, 443) and published and event_observed == receipts[query] and
+                    dt.datetime.combine(dt.date.fromisoformat(window), dt.time(), core.TZ) <= published <= event_observed and
+                    event.get('observation_status') == 'research_window_veto' and event.get('resolution_status') == 'not_determined' and
+                    event.get('observation_window_start') == window and event.get('observation_window_end') == moment.date().isoformat()):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
 def _morning_ready(moment, target, research, news):
     date = moment.date().isoformat()
     start = dt.datetime.combine(moment.date(), dt.time(8), core.TZ)
@@ -51,7 +123,8 @@ def _morning_ready(moment, target, research, news):
         return False
     if research.get('model_version') != core.forecast.MODEL_VERSION or research.get('chase_policy_version') != getattr(core.strategy, 'CHASE_POLICY_VERSION', 'anti-chase-v1'):
         return False
-    if not (news.get('date') == date and news.get('status') == 'verified' and fetched and start <= fetched < end and fetched <= moment):
+    if not (news.get('date') == date and news.get('status') == 'verified' and
+            news.get('verification_protocol') == NEWS_VERIFICATION_PROTOCOL and fetched and start <= fetched < end and fetched <= moment):
         return False
     begun = _instant(news.get('collection_started_at'))
     try:
@@ -75,6 +148,8 @@ def _morning_ready(moment, target, research, news):
         receipts[source['url']] = observed
     if set(receipts) != set(NEWS_SOURCES):
         return False
+    if not _risk_observation_ready(moment, begun, fetched, news.get('risk_monitoring')):
+        return False
     session_risks = news.get('session_risks')
     if not isinstance(session_risks, dict):
         return False
@@ -94,7 +169,7 @@ def _morning_ready(moment, target, research, news):
             return False
         try:
             url = urlsplit(str(item.get('url', '')))
-            published = _instant(item['published_at'])
+            published = _publication_boundary(item)
             source_url = item.get('source_url')
             observed = _instant(item.get('observed_at'))
             if source_url not in receipts:
@@ -112,6 +187,63 @@ def _morning_ready(moment, target, research, news):
 
 def _positive(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
+
+
+def _ai_risk_review(moment, target, candidates, receipt):
+    """An AI receipt can veto current qualified candidates, never create one."""
+    failure='当日云端AI风险复核缺失、未完成或未覆盖全部合格候选，暂停新买入建议。'
+    if not isinstance(receipt,dict) or receipt.get('valid') is not True or receipt.get('morning_qualified') is not True:
+        return False,set(),failure
+    review=receipt.get('review');checked=_instant(receipt.get('checked_at'))
+    if not isinstance(review,dict) or not checked or checked>moment:
+        return False,set(),failure
+    started,completed=_instant(review.get('started_at')),_instant(review.get('completed_at'))
+    start=dt.datetime.combine(moment.date(),dt.time(8),core.TZ)
+    cutoff=start.replace(hour=9,minute=30)
+    if not (receipt.get('protocol')==review.get('protocol')==AI_PROTOCOL and
+            receipt.get('status')==review.get('status')=='complete' and
+            receipt.get('date')==review.get('date')==moment.date().isoformat() and
+            receipt.get('signal_date')==review.get('signal_date')==target and
+            started and completed and start<=started<=completed<cutoff and completed<=checked<=moment):
+        return False,set(),failure
+    reviewed=review.get('reviewed_symbols');sources=review.get('sources');vetoes=review.get('risk_vetoes')
+    if not (isinstance(reviewed,list) and len(reviewed)<=2400 and
+            all(isinstance(s,str) and re.fullmatch(r'sh(?:60\d{4}|68\d{4})',s) for s in reviewed) and
+            len(set(reviewed))==len(reviewed) and {s.get('symbol') for s in candidates}.issubset(set(reviewed)) and
+            isinstance(sources,list) and len(sources)<=2400 and (not reviewed or sources) and
+            isinstance(vetoes,list) and len(vetoes)<=2400):
+        return False,set(),failure
+    ids=set()
+    try:
+        run=urlsplit(str(review.get('run_url','')))
+        if not (run.scheme=='https' and run.hostname=='chatgpt.com' and run.path not in ('','/') and
+                not run.username and not run.password and not run.fragment and run.port in (None,443) and
+                review.get('run_url_scope') in ('task_run','task_chat')):
+            return False,set(),failure
+        for source in sources:
+            if not isinstance(source,dict):return False,set(),failure
+            url=urlsplit(str(source.get('url','')));observed=_instant(source.get('observed_at'))
+            published=dt.date.fromisoformat(source.get('published_date',''))
+            scope='publisher_article_only' if url.hostname=='finance.cctv.com' else 'official_directory_title_only'
+            sid=source.get('id')
+            if not (isinstance(sid,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}',sid) and sid not in ids and
+                    url.scheme=='https' and url.hostname in {'www.sse.com.cn','static.sse.com.cn','query.sse.com.cn','finance.cctv.com'} and
+                    url.port in (None,443) and not url.username and not url.password and not url.fragment and
+                    source.get('scope')==scope and observed and started<=observed<=completed and published<=observed.date()):
+                return False,set(),failure
+            ids.add(sid)
+        veto_symbols=set()
+        for veto in vetoes:
+            if not isinstance(veto,dict):return False,set(),failure
+            symbol=veto.get('symbol');refs=veto.get('source_ids')
+            if not (symbol in reviewed and symbol not in veto_symbols and isinstance(veto.get('reason'),str) and
+                    veto['reason'].strip() and len(veto['reason'])<=500 and isinstance(refs,list) and refs and
+                    all(isinstance(s,str) and s in ids for s in refs)):
+                return False,set(),failure
+            veto_symbols.add(symbol)
+    except (ValueError,TypeError):
+        return False,set(),failure
+    return True,veto_symbols,''
 
 
 def _sell_reference(old, latest, target):
@@ -168,6 +300,9 @@ def publish(date=None):
     session_risks = news.get('session_risks')
     if isinstance(session_risks, dict) and isinstance(session_risks.get('risk_exclusions'), list):
         risk_exclusions = risk_exclusions + session_risks['risk_exclusions']
+    risk_monitoring = news.get('risk_monitoring')
+    if isinstance(risk_monitoring, dict) and isinstance(risk_monitoring.get('risk_exclusions'), list):
+        risk_exclusions = risk_exclusions + risk_monitoring['risk_exclusions']
     risks = {r.get('symbol') for r in risk_exclusions if isinstance(r, dict)}
     candidates = [s for s in stocks if s.get('date') == target and s.get('eligible') is True and
         not core.prediction_failures(s.get('prediction'), target) and not s.get('stale') and
@@ -175,9 +310,13 @@ def publish(date=None):
         not s.get('excluded') and s.get('symbol') not in risks and
         all(_positive(s.get(key)) for key in ('entry_low', 'entry_high', 'stop_loss', 'take_profit', 'raw_close')) and
         s['stop_loss'] < s['entry_low'] <= s['entry_high'] < s['take_profit']]
+    ai_receipt=core.getkv('ai_review',{})
+    ai_ready,ai_vetoes,ai_warning=_ai_risk_review(moment,target,candidates,ai_receipt)
+    candidates=[s for s in candidates if s.get('symbol') not in ai_vetoes]
     candidates.sort(key=lambda s:s['prediction'].get('rank_value',-1e9),reverse=True)
-    pick = candidates[0] if allow_buy and ready and complete and candidates else None
-    sell_date = session_after(date) if allow_buy and ready and complete else None
+    fully_ready=ready and ai_ready
+    pick = candidates[0] if allow_buy and fully_ready and complete and candidates else None
+    sell_date = session_after(date) if allow_buy and fully_ready and complete else None
     buy = dict(pick,stock=pick,recommended_date=date,sell_date=sell_date) if pick else None
     if buy:
         ceiling = pick['chase_risk']['entry_ceiling']['price']
@@ -204,13 +343,15 @@ def publish(date=None):
         warnings.append('本次生成已晚于09:30，不补造盘前买入建议；仅保留真实发布时间及前日建议跟踪。')
     if not ready:
         warnings.append('当日08:00行情任务或有来源的资讯核验未完成，暂停新买入推荐。')
-    pending = allow_buy and not (ready and complete)
+    if not ai_ready:warnings.append(ai_warning)
+    pending = allow_buy and not (fully_ready and complete)
     plan = {'date':date,'status':'pending' if pending else 'published',
             'attempted_at':moment.isoformat(),'published_at':None if pending else moment.isoformat(),'buy':buy,'sell':prior,
             'research_forecasts':research_forecasts,
             'news':news.get('items',[]),'news_status':news.get('status','unavailable'),'risk_exclusions':risk_exclusions,
-            'news_verification': {key: news.get(key) for key in ('verification_scope','window_start','window_end','items_scanned','items_displayed','sources','session_risks')},
-            'timezone':'Asia/Shanghai','mode':'manual_research','data_date':target,'coverage':coverage,'morning_ready':ready,'research_status':research_status,'late':not allow_buy,'warnings':warnings,
+            'news_verification': {key: news.get(key) for key in ('verification_protocol','verification_scope','window_start','window_end','items_scanned','items_displayed','sources','session_risks','risk_monitoring')},
+            'ai_review':ai_receipt if isinstance(ai_receipt,dict) else {},'ai_review_ready':ai_ready,
+            'timezone':'Asia/Shanghai','mode':'manual_research','data_date':target,'coverage':coverage,'morning_ready':fully_ready,'research_status':research_status,'late':not allow_buy,'warnings':warnings,
             'message':'手动决策；当日买入最早下一交易日卖出。' if buy else '已错过盘前发布窗口，今日不补造买入建议。' if not allow_buy else '盘前研究尚未就绪，等待补偿任务重试；暂不提供买入建议。' if pending else '没有同时通过数据、规则和预测验证的买入候选，今日不强行推荐。'}
     # Acquire the writer lock before measuring the actual record time. A slow
     # dashboard read or a busy SQLite writer must not retain an earlier clock.

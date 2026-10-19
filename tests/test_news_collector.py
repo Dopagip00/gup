@@ -21,7 +21,21 @@ def page(rows, number=1, total=None):
     return {'result': rows, 'pageHelp': {'pageNo': number, 'total': len(rows) if total is None else total}}
 
 
+def risk_receipt(moment=NOW, events=None):
+    start=(moment.date()-dt.timedelta(days=31)).isoformat()
+    return {'protocol':news.RISK_PROTOCOL,'status':'complete','source_url':news.SSE_PAGE,
+        'window_start':start,'window_end':moment.date().isoformat(),'lookback_days':31,
+        'observed_at':moment.isoformat(),'queries':[{'keyword':word,'title_query':word,'status':'complete',
+            'url':news.SSE_PAGE,'source_url':news.SSE_PAGE,'window_start':start,'window_end':moment.date().isoformat(),
+            'groups_total':0,'groups_scanned':0,'pages':1,'observed_at':moment.isoformat()} for word in news.RISK_QUERIES],
+        'items_scanned':len(events or []),'risk_exclusions':events or [],'semantics':news.RISK_SEMANTICS}
+
+
 class NewsTests(unittest.TestCase):
+    def setUp(self):
+        observation=patch.object(news,'_risk_window',side_effect=lambda moment,**kwargs:risk_receipt(moment))
+        observation.start();self.addCleanup(observation.stop)
+
     def test_sse_grouped_date_precision_and_future_filter(self):
         data = page([[bulletin(), bulletin(title='法律意见书')], [bulletin(day='2026-10-20')],
                      [bulletin(code='900001')], [bulletin(day='2026-09-30')]])
@@ -72,6 +86,14 @@ class NewsTests(unittest.TestCase):
         with patch.object(news, 'PAGE_SIZE', 1), patch.object(news, '_get', side_effect=responses), patch.object(news.time, 'sleep'):
             with self.assertRaisesRegex(news.NewsError, 'count changed'):
                 news._sse(NOW)
+
+    def test_boolean_or_fractional_pagination_cannot_claim_complete_coverage(self):
+        for key,value in (('total',True),('total',1.5),('pageNo',True),('pageNo',1.5)):
+            data=page([[bulletin()]])
+            data['pageHelp'][key]=value
+            with self.subTest(key=key,value=value),patch.object(news,'_get',return_value=json.dumps(data)):
+                with self.assertRaisesRegex(news.NewsError,'pagination metadata'):
+                    news._sse(NOW)
         with patch.object(news, '_get', return_value=json.dumps(page([], total=1))):
             with self.assertRaisesRegex(news.NewsError, 'incomplete'):
                 news._sse(NOW)
@@ -168,6 +190,8 @@ class NewsTests(unittest.TestCase):
         self.assertIn('不代表', record['verification_scope'])
         self.assertNotIn('sentiment_score', record)
         self.assertEqual(record['window_start'], '2026-10-15')
+        self.assertEqual(record['verification_protocol'],news.VERIFICATION_PROTOCOL)
+        self.assertEqual(record['risk_monitoring']['lookback_days'],31)
         self.assertEqual(record['collection_started_at'], NOW.isoformat())
         self.assertEqual(record['sources'][0]['url'], news.SSE_PAGE)
         self.assertEqual(record['sources'][1]['url'], news.CCTV_PAGE)
@@ -215,6 +239,83 @@ class NewsTests(unittest.TestCase):
             sse.assert_not_called()
         with self.assertRaises(ValueError):
             news.collect(NOW.replace(tzinfo=None))
+
+    def test_independent_risk_observation_failure_prevents_verified_status(self):
+        items,_=news.parse_announcements(page([[bulletin()]]),NOW)
+        market=news.parse_cctv_article('var publishDate="20261019070000"',ARTICLE,'财经新闻',NOW)
+        with patch.object(news,'_sse',return_value=(items,{'status':'complete'})),patch.object(news,'_cctv',return_value=([market],{'status':'complete'})),patch.object(news,'_risk_window',side_effect=news.NewsError('pagination limit reached')):
+            record=news.collect(NOW)
+        self.assertEqual(record['status'],'unavailable')
+        self.assertEqual(record['risk_monitoring']['status'],'failed')
+        self.assertIn('pagination limit reached',record['errors'][0])
+
+    def test_old_risk_is_screened_outside_recent_headlines_and_display_cap(self):
+        old,_=news.parse_announcements(page([[bulletin(code='600241',title='股票交易风险提示公告',day='2026-10-10')]]),NOW,'2026-09-18')
+        old[0].update(observed_at=NOW.isoformat(),query_keyword='股票交易')
+        risk=news.risk_exclusions(old)
+        market=news.parse_cctv_article('var publishDate="20261019070000"',ARTICLE,'财经新闻',NOW)
+        with patch.object(news,'MAX_ITEMS',1),patch.object(news,'_sse',return_value=([],{'status':'complete'})),patch.object(news,'_cctv',return_value=([market],{'status':'complete'})),patch.object(news,'_risk_window',return_value=risk_receipt(NOW,risk)):
+            record=news.collect(NOW)
+        self.assertEqual(record['status'],'verified')
+        self.assertEqual(record['window_start'],'2026-10-15')
+        self.assertEqual(record['risk_monitoring']['window_start'],'2026-09-18')
+        self.assertEqual(record['risk_exclusions'][0]['symbol'],'sh600241')
+        self.assertEqual(record['items'],[dict(market,observed_at=NOW.isoformat())])
+
+
+class RiskObservationTests(unittest.TestCase):
+    def test_each_fixed_keyword_scans_every_page_and_keeps_old_official_events(self):
+        from urllib.parse import parse_qs,urlsplit
+        old=[bulletin(code='600241',title='辽宁时代万恒股份有限公司股票交易风险提示公告',day='2026-10-10')]
+        second=[bulletin(code='600241',title='辽宁时代万恒股份有限公司股票交易异常波动公告',day='2026-10-13',url='/risk_second.pdf')]
+        calls=[]
+        def get(url,referer):
+            params=parse_qs(urlsplit(url).query);calls.append(params)
+            self.assertEqual(params['START_DATE'],['2026-09-18'])
+            self.assertEqual(params['END_DATE'],['2026-10-19'])
+            word=params['TITLE'][0];number=int(params['pageHelp.pageNo'][0])
+            return json.dumps(page([old if number==1 else second],number,2) if word=='股票交易' else page([],number,0))
+        with patch.object(news,'PAGE_SIZE',1),patch.object(news,'_get',side_effect=get),patch.object(news.time,'sleep'):
+            record=news._risk_window(NOW,fixed_observed=NOW)
+        self.assertEqual(len(calls),10)
+        self.assertEqual([query['keyword'] for query in record['queries']],list(news.RISK_QUERIES))
+        self.assertEqual(record['queries'][0]['pages'],2)
+        self.assertEqual({event['published_at'] for event in record['risk_exclusions']},{'2026-10-10','2026-10-13'})
+        self.assertTrue(all(event['symbol']=='sh600241' for event in record['risk_exclusions']))
+        self.assertTrue(all(event['resolution_status']=='not_determined' for event in record['risk_exclusions']))
+        self.assertEqual(record['semantics'],news.RISK_SEMANTICS)
+        self.assertIn('不是全部潜在风险',record['scope'])
+
+    def test_ignored_title_filter_is_not_complete_coverage(self):
+        with patch.object(news,'_get',return_value=json.dumps(page([[bulletin(title='普通董事会公告')]]))):
+            with self.assertRaisesRegex(news.NewsError,'title filter'):
+                news._risk_window(NOW,fixed_observed=NOW)
+
+    def test_official_matching_group_may_include_an_unrelated_companion_document(self):
+        grouped=page([[bulletin(title='关于股票复牌的公告'),bulletin(title='受托管理事务报告',url='/unrelated.pdf')]])
+        with patch.object(news,'_get',return_value=json.dumps(grouped)):
+            items,receipt=news._sse(NOW,'2026-09-18',title_query='复牌')
+        self.assertEqual([item['title'] for item in items],['关于股票复牌的公告'])
+        self.assertEqual(receipt['groups_scanned'],1)
+        self.assertEqual(receipt['accepted_items'],1)
+
+    def test_risk_query_page_limit_is_an_error_not_a_truncated_success(self):
+        first=page([[bulletin(title='股票交易风险提示公告')]],total=2)
+        with patch.object(news,'PAGE_SIZE',1),patch.object(news,'MAX_PAGES',1),patch.object(news,'_get',return_value=json.dumps(first)),patch.object(news.time,'sleep'):
+            with self.assertRaisesRegex(news.NewsError,'pagination limit'):
+                news._risk_window(NOW,fixed_observed=NOW)
+
+    def test_resumption_title_does_not_automatically_resolve_an_earlier_event(self):
+        old,_=news.parse_announcements(page([[bulletin(title='关于股票停牌的公告',day='2026-10-01')]]),NOW,'2026-09-18')
+        resumed,_=news.parse_announcements(page([[bulletin(title='关于股票复牌的公告',url='/resumed.pdf')]]),NOW,'2026-09-18')
+        def scan(moment,start,*,title_query):
+            chosen=[item for item in old+resumed if title_query in item['title']]
+            return chosen,{'status':'complete','groups_total':len(chosen),'groups_scanned':len(chosen),'pages':1}
+        with patch.object(news,'_sse',side_effect=scan):record=news._risk_window(NOW,fixed_observed=NOW)
+        self.assertEqual(len(record['risk_exclusions']),1)
+        self.assertEqual(record['risk_exclusions'][0]['published_at'],'2026-10-01')
+        self.assertEqual(record['risk_exclusions'][0]['resolution_status'],'not_determined')
+        self.assertIn('窗口外不表示安全',record['expiry_note'])
 
 
 if __name__ == '__main__':
