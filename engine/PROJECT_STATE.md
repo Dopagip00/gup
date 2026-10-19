@@ -1,4 +1,4 @@
-# 项目交接 · 2026-10-19 / v2.4.0
+# 项目交接 · 2026-10-19 / v2.4.1
 
 先读本文件、AGENT_OPERATIONS.md、MIGRATION.md和AGENTS.md，继续修改现有项目，不从头重建。
 

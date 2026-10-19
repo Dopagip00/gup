@@ -43,6 +43,15 @@ test('old models or failed cost-stressed decision validation cannot become candi
     {...s.prediction,validation_decision:{protocol:'fixed-nonoverlap-positive-net-v1',eligible:false}}
   ])assert.equal(a.ui.shortEligible({...s,prediction}),false);
 });
+test('compact rejected rows with omitted default flags stay fail-closed and retain readable reasons',()=>{
+  const a=app(),row={symbol:'sh600241',name:'稀疏研究样本',score:90,
+    prediction:{expected_return_pct:8,validation_protocol_complete:true,validation_aggregate:{samples:180,mae_pct:3},reason:'决策验证未胜过现金；更多见详情'},
+    chase_risk:{blocked:true,reasons:[{detail:'急涨后停止新买入'}]}};
+  assert.equal(a.ui.shortEligible(row),false);a.ui.state.connected=true;a.ui.state.dashboard={meta:{},stocks:[row]};a.ui.renderStocks();
+  assert.equal(a.get('stocks-body').children.length,0);a.get('show-unqualified').checked=true;a.ui.renderStocks();
+  const displayed=a.get('stocks-body').children[0];assert.match(displayed.textContent,/急涨后停止新买入/);assert.match(displayed.textContent,/非推荐/);
+  assert.deepEqual(displayed.children.slice(6,9).map(x=>x.textContent),['—','—','—']);
+});
 test('failed positive estimates stay neutral and expose the actual failure reason',()=>{
   const a=app(),s=stock({prediction:{available:true,eligible:false,expected_return_pct:12,reason:'最近段成本压力收益未胜过现金与基准'}});
   a.ui.state.dashboard={meta:{},stocks:[s]};a.ui.state.connected=true;a.get('show-unqualified').checked=true;a.ui.renderStocks();

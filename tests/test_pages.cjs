@@ -26,7 +26,10 @@ test('stale static quotes suppress actionable and nested research levels',()=>{
 
 const NOW=Date.parse('2026-10-19T09:10:00+08:00');
 const manifest={generated_at:'2026-10-19T09:05:00+08:00',data_date:'2026-10-16',repository:'Dopagip00/gup',privacy:'public-market-research-only',snapshot_schema_version:1,app_version:'2.3.0',data_schema_version:1};
-function storage(){const values={};Object.defineProperties(values,{getItem:{value:key=>values[key]??null},setItem:{value:(key,value)=>values[key]=value},removeItem:{value:key=>delete values[key]}});return values;}
+function storage(limit=Infinity){const values={};let failures=0;Object.defineProperties(values,{getItem:{value:key=>values[key]??null},setItem:{value:(key,value)=>{
+  const bytes=Object.keys(values).filter(x=>x!==key).reduce((sum,x)=>sum+2*(x.length+values[x].length),0)+2*(key.length+value.length);
+  if(bytes>limit){failures++;throw Object.assign(Error('quota'),{name:'QuotaExceededError',code:22});}values[key]=value;
+}},removeItem:{value:key=>delete values[key]},quotaFailures:{get:()=>failures}});return values;}
 function browser(options={}){
   const calls=[],localStorage=options.storage||storage();
   const stock={symbol:'sh601811',name:'研究样本',date:'2026-10-16',eligible:true,entry_low:10,entry_high:11,stop_loss:9,take_profit:12,prediction:{available:true,eligible:true,rank_value:1,expected_return_pct:2}};
@@ -116,4 +119,40 @@ test('a snapshot older than the current close stays non-actionable in offline ca
   const live=browser();await live.api('/api/dashboard');
   const offline=browser({now:Date.parse('2026-10-19T17:00:00+08:00'),storage:live.storage,fetch:async()=>{throw Error('offline');}});
   const data=await offline.api('/api/dashboard');assert.equal(data.meta.daily_buy,null);assert.equal(data.stocks[0].eligible,false);
+});
+test('byte budget preserves latest dashboard and daily plan through several large detail snapshots',async()=>{
+  const store=storage(3*1024*1024),b=browser({storage:store,fetch:async(url,init,fixtures)=>{
+    const value=structuredClone(fixtures[url.pathname]||fixtures['/gup/data/stocks/sh601811.json']);
+    if(url.pathname.endsWith('dashboard.json'))value.meta.padding='x'.repeat(650000);
+    if(url.pathname.startsWith('/gup/data/stocks/')){value.stock.symbol=url.pathname.slice(-13,-5);value.padding='x'.repeat(1000000);}
+    return response(value);
+  }});
+  await b.api('/api/dashboard');await b.api('/api/daily-plan');
+  for(const symbol of ['sh600241','sh601811','sh688305'])await b.api('/api/stock?symbol='+symbol);
+  const bytes=Object.keys(store).reduce((sum,key)=>sum+2*(key.length+store[key].length),0);assert(bytes<=3*1024*1024);
+  const offline=browser({storage:store,fetch:async()=>{throw Error('offline');}});
+  assert.equal((await offline.api('/api/dashboard')).meta.snapshot_transport.mode,'offline');
+  assert.equal((await offline.api('/api/daily-plan')).status,'offline');
+});
+test('real quota errors evict only owned older entries and retry before abandoning a new dashboard',async()=>{
+  const store=storage(1800000);store['unrelated-user-setting']='keep';
+  const b=browser({storage:store,fetch:async(url,init,fixtures)=>{
+    const value=structuredClone(fixtures[url.pathname]);
+    if(url.pathname.endsWith('longterm.json'))value.padding='x'.repeat(480000);
+    if(url.pathname.endsWith('dashboard.json'))value.meta.padding='x'.repeat(550000);
+    return response(value);
+  }});
+  await b.api('/api/longterm');await b.api('/api/daily-plan');await b.api('/api/dashboard');
+  assert(store.quotaFailures>0);assert.equal(store['unrelated-user-setting'],'keep');
+  const offline=browser({storage:store,fetch:async()=>{throw Error('offline');}});
+  assert.equal((await offline.api('/api/dashboard')).meta.snapshot_transport.mode,'offline');
+  assert.equal((await offline.api('/api/daily-plan')).status,'offline');
+});
+test('an individually oversized cache entry is skipped without breaking live results or protected records',async()=>{
+  const store=storage(3*1024*1024),b=browser({storage:store});await b.api('/api/dashboard');await b.api('/api/daily-plan');
+  b.setFetch(async(url,init,fixtures)=>{const value=structuredClone(fixtures[url.pathname]);if(url.pathname.endsWith('sh601811.json'))value.padding='x'.repeat(1700000);return response(value);});
+  assert.equal((await b.api('/api/stock?symbol=sh601811')).snapshot_transport.mode,'live');
+  const offline=browser({storage:store,fetch:async()=>{throw Error('offline');}});
+  assert.equal((await offline.api('/api/dashboard')).meta.snapshot_transport.mode,'offline');assert.equal((await offline.api('/api/daily-plan')).status,'offline');
+  await assert.rejects(offline.api('/api/stock?symbol=sh601811'),/offline/);
 });

@@ -18,22 +18,58 @@ META_KEYS = {'app_name','now','status','last_success','data_date','report_date',
 def public_dashboard(value):
     result = {key: copy.deepcopy(value.get(key)) for key in ('index','stocks')}
     table_keys = {'symbol','name','date','close','raw_close','change_pct','score','eligible','excluded',
-                  'exclusion_reason','stale','signal','entry_low','entry_high','stop_loss','take_profit','research_levels','levels_status','chase_risk'}
-    prediction_keys = {'available','eligible','horizon_days','horizon','return_basis','return_definition',
+                  'exclusion_reason','stale','entry_low','entry_high','stop_loss','take_profit','research_levels','levels_status','chase_risk'}
+    prediction_keys = {'available','eligible','horizon_days',
                        'expected_return_pct','interval_low_pct','interval_high_pct','validation_mae_pct',
-                       'validation_samples','rank_value','raw_rank_value','model_version','validation_protocol',
-                       'validation_protocol_complete','validation_aggregate','validation_nonoverlapping',
-                       'validation_decision','reason','cost_stress_return_pct','round_trip_cost_stress_pct'}
+                       'validation_samples','rank_value','model_version','validation_protocol',
+                       'validation_protocol_complete','validation_aggregate','validation_decision','reason'}
     result['stocks'] = [{**{k:v for k,v in s.items() if k in table_keys},
         'prediction':{k:v for k,v in (s.get('prediction') or {}).items() if k in prediction_keys}}
         for s in result.get('stocks') or []]
-    decision_keys = {'protocol','eligible','failures','cost_stress_pct','minimum_trades','minimum_latest_trades',
-                     'aggregate','latest_fold'}
+    def short_reason(value):
+        if not isinstance(value, str):return value
+        parts=[x.strip() for x in re.split(r'[；\n]',value) if x.strip()]
+        brief='；'.join(parts[:2]);suffix='；更多见详情'
+        if len(parts)>2 or len(brief)>300:return brief[:300-len(suffix)]+suffix
+        return brief
     for stock in result['stocks']:
-        decision = stock['prediction'].get('validation_decision')
+        prediction=stock['prediction']
+        if 'reason' in prediction:prediction['reason']=short_reason(prediction['reason'])
+        decision = prediction.get('validation_decision')
         if isinstance(decision, dict):
-            stock['prediction']['validation_decision'] = {k: copy.deepcopy(v) for k,v in decision.items()
-                                                         if k in decision_keys}
+            prediction['validation_decision'] = {k: decision[k] for k in ('protocol','eligible') if k in decision}
+        aggregate=prediction.get('validation_aggregate')
+        if isinstance(aggregate,dict):prediction['validation_aggregate']={k:aggregate[k] for k in ('samples','mae_pct') if k in aggregate}
+        risk=stock.get('chase_risk')
+        if isinstance(risk,dict):
+            compact={k:risk[k] for k in ('version','as_of_date','status','blocked','gate_passed') if k in risk}
+            compact['reasons']=[{k:((str(v)[:132]+'；更多见详情') if len(str(v))>140 else v) if k=='detail' else v for k,v in item.items()
+                                 if k in {'code','severity','detail'}}
+                                for item in risk.get('reasons',[])[:2] if isinstance(item,dict)]
+            if len(risk.get('reasons',[]))>2 and compact['reasons']:
+                last=compact['reasons'][-1];last['detail']=str(last.get('detail',''))[:132]+'；更多见详情'
+            stock['chase_risk']=compact
+        qualified=(stock.get('eligible') is True and prediction.get('eligible') is True
+                   and isinstance(decision,dict) and decision.get('eligible') is True
+                   and isinstance(risk,dict) and risk.get('gate_passed') is True
+                   and not stock.get('stale') and not stock.get('excluded'))
+        if stock.get('raw_close') is not None:stock.pop('close',None)
+        if not qualified:
+            # Missing flags remain fail-closed in the UI. Repeated protocol names
+            # and empty actionable levels add no evidence to a rejected table row.
+            for key in ('eligible','horizon_days','model_version','validation_protocol','validation_decision','rank_value'):
+                prediction.pop(key,None)
+            if prediction.get('available') is True:prediction.pop('available')
+            if isinstance(aggregate,dict) and aggregate.get('samples') is not None:
+                prediction.pop('validation_samples',None)
+                if aggregate.get('mae_pct') is not None:prediction.pop('validation_mae_pct',None)
+            for key in ('eligible','entry_low','entry_high','stop_loss','take_profit','research_levels','levels_status'):
+                stock.pop(key,None)
+            if isinstance(risk,dict) and risk.get('blocked') is True:
+                stock['chase_risk']={'blocked':True,'reasons':stock['chase_risk']['reasons']}
+            else:stock.pop('chase_risk',None)
+        for key in list(stock):
+            if stock[key] is None or stock[key] is False:stock.pop(key)
     result['meta'] = {k: copy.deepcopy(v) for k,v in value.get('meta',{}).items() if k in META_KEYS}
     result['meta'].update(hosted=True, is_trading=False, hosting='github-pages',
         schedule='北京时间交易日08:00采集、09:00发布（GitHub Actions可能延迟；以实际报告时间为准）')

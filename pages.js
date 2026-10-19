@@ -1,7 +1,7 @@
 /* Public snapshots work independently of a local computer. Cache is research-only. */
 (function(root){
   'use strict';
-  const CACHE_SCHEMA=3, CACHE_MAX_AGE=7*86400000, MAX_CACHE_ENTRIES=6;
+  const CACHE_SCHEMA=3, CACHE_MAX_AGE=7*86400000, MAX_CACHE_ENTRIES=6, CACHE_BYTE_BUDGET=3*1024*1024;
   const REQUEST_TIMEOUT=9000, ATTEMPTS=2;
   function clock(now=new Date()){
     const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now);
@@ -76,7 +76,7 @@
     throw new Error(last?.name==='AbortError'?'公开快照读取超时，请重试。':last?.message||'公开快照读取失败');
   }
   let manifest=null,checked=0,checking=null;
-  const files=new Map(),memory=new Map();
+  const files=new Map(),memory=new Map(),memoryBytes=new Map();
   async function currentManifest(force=false){
     if(force || !manifest || Date.now()-checked>15000){
       if(!checking)checking=fetchJson('data/manifest.json').then(m=>{
@@ -89,6 +89,11 @@
     return manifest;
   }
   function storageKey(key){return `gup:research-only:${CACHE_SCHEMA}:${baseUrl().href}:${key}`;}
+  function protectedCache(key){return key===storageKey('dashboard:latest')||key===storageKey('daily-plan');}
+  function cacheBytes(key,value){return (key.length+value.length)*2;}
+  function cacheVictim(keys,incoming){
+    return keys.find(key=>!protectedCache(key)) || (protectedCache(incoming)?keys.find(key=>key!==incoming):null);
+  }
   function validateBundle(paths,data,m){
     for(const path of paths){
       const value=data[path];
@@ -103,7 +108,11 @@
   }
   function readCache(key,paths){
     let entry=memory.get(key);
-    if(!entry)try{entry=JSON.parse(root.localStorage?.getItem(storageKey(key))||'null');}catch{}
+    if(!entry)try{
+      const raw=root.localStorage?.getItem(storageKey(key));
+      if(raw && cacheBytes(storageKey(key),raw)>CACHE_BYTE_BUDGET){root.localStorage.removeItem(storageKey(key));return null;}
+      entry=JSON.parse(raw||'null');
+    }catch{}
     const now=Date.now();
     if(!entry || entry.schema!==CACHE_SCHEMA || entry.base!==baseUrl().href || !validManifest(entry.manifest,now,true) || !Number.isFinite(entry.saved_at) || entry.saved_at>now+300000 || now-entry.saved_at>CACHE_MAX_AGE || !entry.files || paths.some(path=>!Object.hasOwn(entry.files,path)))return null;
     try{validateBundle(paths,entry.files,entry.manifest);}catch{return null;}
@@ -112,13 +121,42 @@
   function saveCache(key,m,data){
     if(!validManifest(m,Date.now(),true))return;
     const entry={schema:CACHE_SCHEMA,base:baseUrl().href,saved_at:Date.now(),manifest:structuredClone(m),files:structuredClone(data)};
-    memory.delete(key);memory.set(key,entry);
-    while(memory.size>MAX_CACHE_ENTRIES)memory.delete([...memory.keys()].find(x=>x!=='dashboard:latest'&&x!=='daily-plan')||memory.keys().next().value);
+    const incoming=storageKey(key),serialized=JSON.stringify(entry),size=cacheBytes(incoming,serialized);
+    memory.delete(key);memoryBytes.delete(key);
+    if(size>CACHE_BYTE_BUDGET){try{root.localStorage?.removeItem(incoming);}catch{}return;}
+    memory.set(key,entry);memoryBytes.set(key,size);
+    while(memory.size>MAX_CACHE_ENTRIES || [...memoryBytes.values()].reduce((a,b)=>a+b,0)>CACHE_BYTE_BUDGET){
+      const victim=cacheVictim([...memory.keys()].map(storageKey),incoming);
+      if(!victim)break;
+      const name=[...memory.keys()].find(item=>storageKey(item)===victim);memory.delete(name);memoryBytes.delete(name);
+    }
     try{
       const prefix=`gup:research-only:${CACHE_SCHEMA}:${baseUrl().href}:`;
-      const keys=Object.keys(root.localStorage||{}).filter(x=>x.startsWith(prefix) && x!==storageKey(key)).sort((a,b)=>Number(a===storageKey('dashboard:latest')||a===storageKey('daily-plan'))-Number(b===storageKey('dashboard:latest')||b===storageKey('daily-plan')));
-      while(keys.length>=MAX_CACHE_ENTRIES)root.localStorage.removeItem(keys.shift());
-      root.localStorage?.setItem(storageKey(key),JSON.stringify(entry));
+      const records=new Map();
+      for(const existing of Object.keys(root.localStorage||{}).filter(x=>x.startsWith(prefix)&&x!==incoming)){
+        const raw=root.localStorage.getItem(existing)||'',bytes=cacheBytes(existing,raw);
+        if(bytes>CACHE_BYTE_BUDGET){root.localStorage.removeItem(existing);continue;}
+        let saved=0;try{saved=JSON.parse(raw).saved_at||0;}catch{}
+        records.set(existing,{bytes,saved});
+      }
+      const ordered=[...records.keys()].sort((a,b)=>records.get(a).saved-records.get(b).saved);
+      records.set(incoming,{bytes:size,saved:Date.now()});ordered.push(incoming);
+      while(records.size>MAX_CACHE_ENTRIES || [...records.values()].reduce((sum,x)=>sum+x.bytes,0)>CACHE_BYTE_BUDGET){
+        const victim=cacheVictim(ordered.filter(x=>records.has(x)),incoming);
+        if(!victim)break;
+        records.delete(victim);root.localStorage.removeItem(victim);
+      }
+      if(!records.has(incoming))return;
+      // Browser/site quota can be lower than our budget or shared with other data.
+      // Each failed attempt removes at most one owned entry; never touch other keys.
+      for(let attempt=0,limit=records.size;attempt<limit;attempt++){
+        try{root.localStorage?.setItem(incoming,serialized);return;}
+        catch(error){
+          if(!['QuotaExceededError','NS_ERROR_DOM_QUOTA_REACHED'].includes(error?.name)&&![22,1014].includes(error?.code))return;
+          const victim=cacheVictim(ordered.filter(x=>records.has(x)&&x!==incoming),incoming);
+          if(!victim)return;records.delete(victim);root.localStorage.removeItem(victim);
+        }
+      }
     }catch{} // Private browsing and full phone storage must not break live access.
   }
   async function bundle(paths,key){

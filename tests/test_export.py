@@ -61,12 +61,41 @@ class PublicationTests(unittest.TestCase):
               'prediction':{'reason':'未通过决策验证','validation_decision':decision}}]}
         prediction=module.public_dashboard(data)['stocks'][0]['prediction']
         self.assertEqual(prediction['reason'],'未通过决策验证')
-        published=prediction['validation_decision']
-        self.assertEqual(set(published),{'protocol','eligible','failures','cost_stress_pct',
-            'minimum_trades','minimum_latest_trades','aggregate','latest_fold'})
-        self.assertIsNone(published['aggregate']['net_mean_selected_pct'])
-        self.assertIsNone(published['latest_fold']['worst_trade_pct'])
+        self.assertNotIn('validation_decision',prediction)
         self.assertIn('opportunities',decision)
-        self.assertNotIn('private',str(published))
+        self.assertNotIn('private',str(prediction))
+
+    def test_table_risk_evidence_and_reasons_are_bounded_and_source_is_unchanged(self):
+        risk={'version':'anti-chase-v1','as_of_date':'2026-10-19','status':'blocked','blocked':True,
+              'gate_passed':False,'metrics':{'large':'x'*10000},'thresholds':{'long':'x'*10000},
+              'scope_note':'x'*10000,'reasons':[{'code':str(i),'severity':'block','detail':'风险'*1000,
+              'private':'private'} for i in range(5)]}
+        data={'meta':{},'stocks':[{'symbol':'sh600241','eligible':False,'chase_risk':risk,
+            'prediction':{'eligible':False,'reason':'第一项；第二项；第三项'+('很长'*500),
+            'validation_nonoverlapping':{'large':'x'*10000},
+            'validation_aggregate':{'samples':180,'mae_pct':2.1,'large':'x'*10000}}}]}
+        stock=module.public_dashboard(data)['stocks'][0];prediction=stock['prediction']
+        self.assertIsNot(stock.get('eligible'),True);self.assertIsNot(stock['chase_risk'].get('gate_passed'),True)
+        self.assertEqual(len(stock['chase_risk']['reasons']),2)
+        self.assertTrue(all(len(reason['detail'])<=140 for reason in stock['chase_risk']['reasons']))
+        self.assertNotIn('metrics',stock['chase_risk']);self.assertNotIn('scope_note',stock['chase_risk'])
+        self.assertNotIn('validation_nonoverlapping',prediction)
+        self.assertEqual(prediction['validation_aggregate'],{'samples':180,'mae_pct':2.1})
+        self.assertLessEqual(len(prediction['reason']),300);self.assertIn('更多见详情',prediction['reason'])
+        self.assertEqual(len(risk['reasons']),5);self.assertIn('metrics',risk)
+
+    def test_qualified_rows_keep_every_ui_gate_and_unavailable_rows_do_not_reveal_old_estimates(self):
+        prediction={'available':True,'eligible':True,'model_version':'ridge-cycle-v3',
+            'validation_protocol':'purged-expanding-3x60-decision-v1',
+            'validation_decision':{'protocol':'fixed-nonoverlap-positive-net-v1','eligible':True,'large':'x'*10000},
+            'rank_value':1,'expected_return_pct':2}
+        risk={'version':'anti-chase-v1','gate_passed':True,'blocked':False,'reasons':[]}
+        data={'meta':{},'stocks':[{'symbol':'sh600000','eligible':True,'prediction':prediction,'chase_risk':risk},
+              {'symbol':'sh600001','eligible':False,'prediction':{'available':False,'expected_return_pct':99}}]}
+        rows=module.public_dashboard(data)['stocks']
+        self.assertTrue(rows[0]['eligible']);self.assertTrue(rows[0]['prediction']['available'])
+        self.assertTrue(rows[0]['prediction']['eligible']);self.assertTrue(rows[0]['chase_risk']['gate_passed'])
+        self.assertEqual(rows[0]['prediction']['validation_decision'],{'protocol':'fixed-nonoverlap-positive-net-v1','eligible':True})
+        self.assertFalse(rows[1]['prediction']['available']);self.assertIsNot(rows[1].get('eligible'),True)
 
 if __name__=='__main__':unittest.main()
