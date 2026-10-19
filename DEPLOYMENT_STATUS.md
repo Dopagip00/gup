@@ -1,4 +1,4 @@
-# 沪研部署验收 / 2026-10-18（Asia/Hong_Kong）
+# 沪研部署验收 / 更新至2026-10-19（Asia/Hong_Kong）
 
 当前公开网站：https://dopagip00.github.io/gup/
 仓库：https://github.com/Dopagip00/gup
@@ -23,7 +23,7 @@
 
 ## 验收边界与接续
 
-首次发布和源码push自动触发已实际通过。真正交易日的08:00外部行情/新闻采集、09:00定时触发、完成时间、报价与日报质量尚未发生；2026-10-18周日closed不代表这些成功。下一待核验日期2026-10-19，仍以官方交易日历为准。没有合格候选不强行推荐，不把验证误差写成上涨概率。
+截至2026-10-18，首次发布和源码push自动触发已实际通过，真正交易日的盘前采集与定时触发仍待验证；周日closed不代表采集成功。10月19日的后续实际记录见下方v2.2验收。没有合格候选不强行推荐，不把验证误差写成上涨概率。
 
 后续沿用原仓库和研究程序，不需重新开发或让电脑常开。不修改Dopagip00.github.io主页仓库；ashare-cloud只保留历史原型，不继续Sites发布。
 
@@ -32,4 +32,15 @@
 ## 跨次自动更新验收
 
 第二次来源提交469e425c3ece3c56aab026b31c6f303fe03da59b自动触发运行39124348820：https://github.com/Dopagip00/gup/actions/runs/39124348820 。research、deploy、fundamentals、deploy-longterm再次全部success。research日志确认已从前一次运行成功下载研究缓存和独立日报artifact，再按真实周日时间publish=closed；研究缓存重新上传58,615,597字节，网站再次部署成功。由此实际验证源码提交自动发布、跨次缓存恢复与重复发布；仍不将此等同于尚未发生的交易日08/09定时采集验收。
+
+## v2.2预测验证、风险来源与真实发布
+
+- 来源提交9daec884ca414748b6f614d20248c6ec45ca0569新增三段时间验证、双基准、非重叠方向、0.30个百分点研究成本压力、官方停复牌否决和事前跟踪；公开方法与局限见ACCURACY_AUDIT.md。固定历史回放未证明模型优于零收益基准，不声称准确率或收益已经提高。
+- 首轮运行39187260727研究和短线Pages成功，但财务阶段因“2316只已完成、仅4只重试失败”被误判整体error而停止。公开缓存确认了根因；缺行情的sh600293/sh601059/sh601198/sh688496没有被补造数据或恢复资格。
+- 修复提交72e3cd235e51239fe86bb7d9bbf8e7c24afad64c：https://github.com/Dopagip00/gup/commit/72e3cd235e51239fe86bb7d9bbf8e7c24afad64c 。运行39187959655：https://github.com/Dopagip00/gup/actions/runs/39187959655 。北京时间10:00:59触发，research、deploy、fundamentals、deploy-longterm四阶段全部success，10:04:00完成。财务缓存回执真实current=2316、attempted=4、failed=4、status=partial，随后同日完整财报cached成功，报价received=2320、failed_batches=0。
+- 此次从上轮缓存及独立日报备份恢复；重复发布保留原published_at=2026-10-19T09:53:39.662239+08:00，归档未重复提交。真实日报data_date=2026-10-16、late=true、morning_ready=false、buy=null、research_forecasts=[]。超过09:30没有补造买入或事前预测。
+- 网站data/system.json的版本2.2.0已直接读取；浏览器“每日研究档案”实际显示事前跟踪0条及无成熟结果说明，审计链接有效。2321详情仍保留，仅公开研究；缓存全市场2268个可用模型、2254个完整分段验证、0个推荐合格。没有事前记录，不展示虚构准确率。
+- 本轮基础检查：本机153/153、GitHub63/63、网页日期保护4/4；重试修复的相关14/14回归通过，包含2316当前+4失败的连续重试、全部失败仍error和并发回滚。本机源与engine的44个源文件同步检查通过，本机启动/健康/新版模型接口再次通过。
+- 09:52查询时尚无schedule记录，随后实际出现schedule运行39188053278，created_at=2026-10-19T02:02:10Z（北京时间10:02:10），等待串行工作流后执行。由此确认定时触发已出现，但显著晚于盘前窗口；不据此宣称08:00/09:00准时采集或合格晨报已成功。继续只保留原08/09两个cron，不增加时钟、不伪造历史时间。
+- 该schedule运行最终success：https://github.com/Dopagip00/gup/actions/runs/39188053278 。日志真实RESEARCH_STAGE=collect，10:04:20.183513开始、10:08:53.062652结束；target_date=2026-10-16，status=partial，最新证券名单研究total=2318、ok=2316、failed=2，news_status=unavailable。research及deploy成功，后置两阶段按collect分支跳过。它是延迟到盘中的采集与网页刷新，不是09点定时晨报，更不是合格盘前买入证明；上方2320只的数值保留为前一轮缓存验收时刻的实证。
 
