@@ -433,6 +433,33 @@ def current_close_research(core, moment, target):
     return _current_research(core, moment, target, after_close=True)
 
 
+def public_universe_receipt(core):
+    """Expose bounded official-list provenance, not arbitrary engine settings."""
+    value = core.getkv('universe_info', {})
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    if value.get('mode') == 'shanghai':
+        result['mode'] = 'shanghai'
+    if type(value.get('count')) is int and 0 < value['count'] <= 10000:
+        result['count'] = value['count']
+    for key in ('fetched_at', 'last_live_attempt_at'):
+        if isinstance(value.get(key), str) and len(value[key]) <= 64:
+            result[key] = value[key]
+    for key in ('source', 'source_api'):
+        source = value.get(key)
+        if isinstance(source, str) and len(source) <= 300 and re.fullmatch(
+                r'https://(?:www\.|query\.)?sse\.com\.cn/[A-Za-z0-9_./-]+', source):
+            result[key] = source
+    if type(value.get('cache_reused')) is bool:
+        result['cache_reused'] = value['cache_reused']
+    if isinstance(value.get('source_error'), str):
+        result['source_error'] = value['source_error'][:300]
+    if value.get('source_provenance') in ('sse_live_verified', 'legacy_sse_engine_path'):
+        result['source_provenance'] = value['source_provenance']
+    return result
+
+
 def collect_after_close(core, service, moment):
     """Refresh real completed daily bars without rewriting the morning record."""
     date = moment.date().isoformat()
@@ -444,6 +471,7 @@ def collect_after_close(core, service, moment):
     if cached:
         result.update(status='cached', research=cached, research_cached=True,
                       research_finished_at=cached['finished_at'], finished_at=core.now().isoformat(),
+                      universe_receipt=public_universe_receipt(core),
                       message='复用已核验的当日收盘行情；保留真实完成时间，不作为盘前采集或改写原日报。')
         core.putkv('github_close_collect', result)
         return result
@@ -454,7 +482,7 @@ def collect_after_close(core, service, moment):
         if previous.get('target_date') == target:
             core.putkv('last_success', {})
         with short_term_refresh(core, target):
-            service.refresh(force=False)
+            service.refresh(force=False, allow_same_day_universe_cache=True)
         finished = core.now()
         receipt = current_close_research(core, finished, target)
         if (service.status.get('status') not in ('success', 'partial') or receipt is None
@@ -466,9 +494,16 @@ def collect_after_close(core, service, moment):
     except Exception as exc:
         result.update(status='error', error=type(exc).__name__, finished_at=core.now().isoformat(),
                       reason='收盘行情刷新未通过完整性核验；不能将旧行情标为当日成功。')
+        # This engine exception explicitly contains public provider/data-quality
+        # failures safe to display. Other exceptions can contain local paths or
+        # private configuration, so their messages remain excluded.
+        market_error = getattr(core.md, 'MarketDataError', None)
+        if isinstance(market_error, type) and isinstance(exc, market_error):
+            result['error_detail'] = str(exc)[:300]
     finally:
         if not core.getkv('last_success') and previous:
             core.putkv('last_success', previous)
+    result['universe_receipt'] = public_universe_receipt(core)
     core.putkv('github_close_collect', result)
     return result
 

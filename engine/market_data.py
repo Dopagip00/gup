@@ -22,6 +22,8 @@ import urllib.request
 CHINA = dt.timezone(dt.timedelta(hours=8))
 CALENDAR_SOURCE = 'https://www.sse.com.cn/disclosure/dealinstruc/closed/'
 SSE_LIST_SOURCE = 'https://www.sse.com.cn/assortment/stock/list/share/'
+SSE_LIST_APIS = ('https://query.sse.com.cn/sseQuery/commonQuery.do',
+                 'https://query.sse.com.cn/commonQuery.do')
 # Current public Tencent route also used by AKShare stock_hist_tx.py.
 HISTORY_SOURCE = 'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get'
 EASTMONEY_HISTORY_SOURCE = 'https://push2his.eastmoney.com/api/qt/stock/kline/get'
@@ -47,6 +49,10 @@ class MarketDataError(RuntimeError):
     """A provider/network/data-quality failure safe to display to the user."""
 
 
+class MarketNetworkError(MarketDataError):
+    """Transport/HTTP failure, distinct from invalid provider data."""
+
+
 class CalendarUnavailable(MarketDataError):
     pass
 
@@ -60,6 +66,7 @@ def _request(url, *, encoding='utf-8', referer=None, retries=2, timeout=15):
                'Accept': '*/*', 'Referer': referer or 'https://finance.qq.com/'}
     host = urllib.parse.urlsplit(url).hostname or 'market provider'
     error = None
+    network_only = True
     for attempt in range(retries + 1):
         try:
             _throttle()
@@ -71,9 +78,11 @@ def _request(url, *, encoding='utf-8', referer=None, retries=2, timeout=15):
             return payload.decode(encoding)
         except (OSError, urllib.error.URLError, ValueError, UnicodeError) as exc:
             error = f'HTTP {exc.code}' if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__
+            network_only = network_only and isinstance(exc, (OSError, urllib.error.URLError))
             if attempt < retries:
                 time.sleep(2 ** attempt)
-    raise MarketDataError(f'{host}: request failed after {retries + 1} attempts ({error})')
+    error_type = MarketNetworkError if network_only else MarketDataError
+    raise error_type(f'{host}: request failed after {retries + 1} attempts ({error})')
 
 
 def _json(url, **kwargs):
@@ -454,11 +463,14 @@ def _parse_sse_universe(payload):
     if not isinstance(payload, dict) or payload.get('actionErrors'):
         raise MarketDataError('上交所证券列表返回错误')
     rows = payload.get('result')
-    total = payload.get('pageHelp', {}).get('total')
-    if not isinstance(rows, list) or not isinstance(total, int) or not rows or len(rows) != total:
+    page = payload.get('pageHelp')
+    total = page.get('total') if isinstance(page, dict) else None
+    if not isinstance(rows, list) or type(total) is not int or not rows or len(rows) != total:
         raise MarketDataError('上交所证券列表不完整，停止全市场更新')
     result, seen = [], set()
     for item in rows:
+        if not isinstance(item, dict):
+            raise MarketDataError('上交所证券列表包含无效证券记录')
         code, name = str(item.get('A_STOCK_CODE', '')), str(item.get('SEC_NAME_CN', '')).strip()
         if not re.fullmatch(r'(?:60[0135]|68[89])\d{3}', code) or not name:
             raise MarketDataError('上交所证券列表包含无效代码或空名称')
@@ -479,8 +491,21 @@ def _sse_universe():
               'type': 'inParams', 'STOCK_TYPE': '1,8', 'REG_PROVINCE': '', 'CSRC_CODE': '',
               'STOCK_CODE': '', 'COMPANY_STATUS': '2,4,5,7,8', 'isPagination': 'true',
               'pageHelp.pageNo': '1', 'pageHelp.beginPage': '1', 'pageHelp.endPage': '1'}
-    url = 'https://query.sse.com.cn/sseQuery/commonQuery.do?' + urllib.parse.urlencode(params)
-    return _parse_sse_universe(_json(url, referer=SSE_LIST_SOURCE))
+    query = urllib.parse.urlencode(params)
+    errors, failures = [], []
+    for route in SSE_LIST_APIS:
+        try:
+            rows = _parse_sse_universe(_json(route + '?' + query, referer=SSE_LIST_SOURCE))
+            for row in rows:
+                row['source_api'] = route
+            return rows
+        except MarketDataError as exc:
+            # Both routes are public endpoints on the same official SSE host.
+            # Each response must independently pass the full-list validation.
+            errors.append(urllib.parse.urlsplit(route).path + ': ' + str(exc)[:240])
+            failures.append(exc)
+    error_type = MarketNetworkError if all(isinstance(exc, MarketNetworkError) for exc in failures) else MarketDataError
+    raise error_type('上交所官方证券列表接口均失败；' + '；'.join(errors))
 
 
 def _eastmoney_universe(mode):

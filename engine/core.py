@@ -33,6 +33,9 @@ HEAVYWEIGHTS = {'sh600519', 'sh600900', 'sh601318', 'sh601628', 'sh601601', 'sh6
                'sh601336', 'sh600030', 'sh600837', 'sh601688', 'sh601211', 'sh601066',
                'sh600028', 'sh601857', 'sh600938', 'sh600941', 'sh601728', 'sh600050',
                'sh601088', 'sh601899', 'sh600309', 'sh601668', 'sh601390', 'sh601186'}
+# A conservative cache safety floor, not a claim about the actual SSE count.
+# A smaller official market must be verified live again before cache reuse.
+MIN_SSE_CACHED_UNIVERSE = 2000
 
 
 def exclusion(symbol, name, quote=None):
@@ -490,6 +493,66 @@ def gate_signal(result, target, benchmark_ok=True):
     return result
 
 
+def _same_day_sse_universe_cache(target, moment, source_error):
+    """Reuse only a full, previously verified same-day SSE list after close.
+
+    This keeps the original verification instant. It never repairs a malformed
+    live response, accepts a prior day's universe, or claims a fresh list fetch.
+    """
+    if (not isinstance(source_error, md.MarketNetworkError) or not isinstance(moment, dt.datetime)
+            or moment.tzinfo is None):
+        raise md.MarketDataError('同日证券名单缓存仅允许明确的官方网络失败和真实带时区时间')
+    moment = moment.astimezone(TZ)
+    if (target != moment.date().isoformat() or moment.time().replace(tzinfo=None) < dt.time(16)
+            or not md.is_trading_day(moment.date())):
+        raise md.MarketDataError('同日证券名单缓存仅允许官方交易日16:00后更新当日完整行情')
+    with connect() as con:
+        con.execute('BEGIN')
+        saved = con.execute('SELECT value FROM kv WHERE key=?', ('universe_info',)).fetchone()
+        try:
+            receipt = json.loads(saved['value']) if saved else None
+        except (TypeError, ValueError) as exc:
+            raise md.MarketDataError('同日证券名单缓存收据格式无效') from exc
+        rows = [dict(row) for row in con.execute('SELECT symbol,name FROM securities WHERE active=1 ORDER BY symbol')]
+    if (not isinstance(receipt, dict) or receipt.get('mode') != 'shanghai'
+            or type(receipt.get('count')) is not int or not MIN_SSE_CACHED_UNIVERSE <= receipt['count'] <= 10000
+            or len(rows) != receipt['count']):
+        raise md.MarketDataError('同日沪市全量缓存数量、范围或活动证券名单不一致；不使用小名单')
+    try:
+        fetched = dt.datetime.fromisoformat(str(receipt.get('fetched_at', '')).replace('Z', '+00:00'))
+    except (TypeError, ValueError) as exc:
+        raise md.MarketDataError('同日证券名单缓存缺少有效原始核验时间') from exc
+    if (fetched.tzinfo is None or fetched.astimezone(TZ).date() != moment.date()
+            or fetched.astimezone(TZ) > moment):
+        raise md.MarketDataError('证券名单缓存不是当日已完成核验，拒绝跨日、无时区或未来时间')
+    source = receipt.get('source')
+    if source not in (None, '', md.SSE_LIST_SOURCE):
+        raise md.MarketDataError('证券名单缓存不是上交所官方来源')
+    source_api = receipt.get('source_api')
+    if source_api not in (None, '', *md.SSE_LIST_APIS):
+        raise md.MarketDataError('证券名单缓存接口来源不是已知上交所官方接口')
+    seen = set()
+    for row in rows:
+        symbol, name = row['symbol'], row['name']
+        if (not isinstance(symbol, str) or not re.fullmatch(r'sh(?:60[0135]|68[89])\d{3}', symbol)
+                or symbol in seen or not isinstance(name, str) or name != name.strip() or not 1 <= len(name) <= 80
+                or name == symbol or not re.search('[\u3400-\u9fffA-Za-z]', name)
+                or re.search(r'[\x00-\x1f\x7f]', name)):
+            raise md.MarketDataError('同日证券名单缓存包含重复、非沪市代码或未核验名称')
+        seen.add(symbol)
+    # Include only safe public diagnostics, never an arbitrary provider body,
+    # query string, filesystem path or credential-bearing exception message.
+    statuses = list(dict.fromkeys(re.findall(r'\bHTTP\s+(\d{3})\b', str(source_error))))
+    detail = '上交所官方证券列表网络请求失败' + ('（HTTP ' + '/'.join(statuses[:4]) + '）' if statuses else '')
+    updated = dict(receipt, source=md.SSE_LIST_SOURCE, cache_reused=True,
+                   last_live_attempt_at=moment.isoformat(), source_error=detail[:300])
+    if source in (None, '') or receipt.get('source_provenance') == 'legacy_sse_engine_path':
+        updated['source_provenance'] = 'legacy_sse_engine_path'
+    else:
+        updated['source_provenance'] = 'sse_live_verified'
+    return rows, updated
+
+
 class Service:
     def __init__(self):
         init_db()
@@ -516,7 +579,7 @@ class Service:
         finally:
             self.lock.release()
 
-    def refresh(self, force=False):
+    def refresh(self, force=False, *, allow_same_day_universe_cache=False):
         # A listening loopback socket provides a crash-safe lock shared by CLI and server.
         sync_lock = socket.socket()
         try:
@@ -539,17 +602,33 @@ class Service:
                 con.execute("UPDATE runs SET status='interrupted',ended_at=?,error='上次更新未完成，将重新尝试' WHERE status='running'", (now().isoformat(),))
                 run_id = con.execute('INSERT INTO runs(started_at,target_date,status) VALUES(?,?,?)', (now().isoformat(), target, 'running')).lastrowid
             self.status = {'status': 'running', 'phase': '下载沪市证券列表', 'completed': 0, 'total': 0}
+            universe_receipt = None
             if cfg['universe'] == 'watchlist':
                 stocks = [{'symbol': s, 'name': s} for s in cfg['watchlist'].split(',')]
             else:
-                stocks = md.get_universe(cfg['universe'])
+                try:
+                    stocks = md.get_universe(cfg['universe'])
+                except md.MarketNetworkError as exc:
+                    if allow_same_day_universe_cache is not True or cfg['universe'] != 'shanghai':
+                        raise
+                    stocks, universe_receipt = _same_day_sse_universe_cache(target, now(), exc)
             if not stocks:
                 raise RuntimeError('股票列表为空；拒绝生成全市场报告')
+            if universe_receipt is None:
+                universe_receipt = {'mode': cfg['universe'], 'count': len(stocks),
+                                    'fetched_at': now().isoformat(), 'cache_reused': False}
+                if cfg['universe'] == 'shanghai':
+                    apis = {stock.get('source_api') for stock in stocks}
+                    if (any(stock.get('source') != md.SSE_LIST_SOURCE for stock in stocks)
+                            or len(apis) != 1 or next(iter(apis)) not in md.SSE_LIST_APIS):
+                        raise md.MarketDataError('上交所实时完整名单缺少可核验的官方页面或实际接口来源')
+                    universe_receipt.update(source=md.SSE_LIST_SOURCE, source_api=next(iter(apis)),
+                                            source_provenance='sse_live_verified')
             with connect() as con:
                 con.execute('UPDATE securities SET active=0')
                 con.executemany('INSERT INTO securities VALUES(?,?,1) ON CONFLICT(symbol) DO UPDATE SET name=excluded.name,active=1', [(s['symbol'], s['name']) for s in stocks])
                 con.execute('UPDATE runs SET total=? WHERE id=?', (len(stocks), run_id))
-            putkv('universe_info', {'mode': cfg['universe'], 'count': len(stocks), 'fetched_at': now().isoformat()})
+            putkv('universe_info', universe_receipt)
             index_error = None
             try:
                 index_hist = md.fetch_history('sh000001', count=cfg['history_count'])
@@ -645,6 +724,9 @@ class Service:
 
     def dashboard(self, date=None):
         warnings = []
+        universe_info = getkv('universe_info', {})
+        if isinstance(universe_info, dict) and universe_info.get('cache_reused') is True:
+            warnings.append(f"上交所实时名单接口网络失败；本次复用当日{universe_info.get('fetched_at')}已核验的完整{universe_info.get('count')}只名单，保留原核验时间。")
         cloud_status=getkv('cloud_status',{})
         if not cloud_status.get('schedule_verified'):
             warnings.append('云端08:00/09:00计划尚未完成注册验证；本机旧定时任务已停用，请勿将页面中的计划时刻视为运行证明。')

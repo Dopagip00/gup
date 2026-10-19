@@ -185,8 +185,8 @@ class RunnerTests(unittest.TestCase):
         core.putkv('ai_review',{'status':'late','review':{'signal_date':'2026-10-16'}})
         original=copy.deepcopy(core.values)
         service.status={'status':'partial','ok':99,'failed':1,'total':100}
-        def refresh(force):
-            self.assertFalse(force)
+        def refresh(force, *, allow_same_day_universe_cache=False):
+            self.assertFalse(force);self.assertTrue(allow_same_day_universe_cache)
             self.closing_cache(core)
             receipt=dict(core.getkv('last_completed'),finished_at=core.now().isoformat(),status='partial',ok=99,failed=1)
             core.putkv('last_completed',receipt)
@@ -205,9 +205,14 @@ class RunnerTests(unittest.TestCase):
 
     def test_closing_cache_is_reused_with_original_time_and_requires_fresh_benchmark(self):
         core=self.closing_core();receipt=self.closing_cache(core);service=Mock()
+        universe={'mode':'shanghai','count':100,'fetched_at':'2026-10-19T10:04:25+08:00',
+            'cache_reused':True,'last_live_attempt_at':'2026-10-19T16:20:03+08:00',
+            'source_error':'query.sse.com.cn: HTTP 403','source_provenance':'legacy_sse_engine_path'}
+        core.putkv('universe_info',dict(universe,private_settings='PRIVATE'))
         with patch.object(runner,'collect_news') as news,patch.object(runner,'short_term_refresh') as short:
             result=runner.run_stage('collect',core,service)
         self.assertEqual(result['status'],'cached');self.assertEqual(result['research'],receipt)
+        self.assertEqual(result['universe_receipt'],universe)
         self.assertEqual(result['research_finished_at'],'2026-10-19T16:27:00+08:00')
         self.assertEqual(core.getkv('last_completed'),receipt)
         news.assert_not_called();short.assert_not_called();service.refresh.assert_not_called()
@@ -219,6 +224,26 @@ class RunnerTests(unittest.TestCase):
         core.putkv('last_completed',receipt)
         with core.connect() as con:con.execute("DELETE FROM signals WHERE symbol='sh000001'")
         self.assertIsNone(runner.current_close_research(core,core.now(),'2026-10-19'))
+
+    def test_closing_universe_receipt_is_a_bounded_public_whitelist(self):
+        core=self.closing_core()
+        core.putkv('universe_info',{'mode':'shanghai','count':2318,
+            'fetched_at':'2026-10-19T10:04:25.964452+08:00','cache_reused':True,
+            'last_live_attempt_at':'2026-10-19T21:09:55+08:00',
+            'source':'https://www.sse.com.cn/assortment/stock/list/share/',
+            'source_api':'https://query.sse.com.cn/sseQuery/commonQuery.do',
+            'source_error':'HTTP 403 '+('x'*400),'source_provenance':'legacy_sse_engine_path',
+            'config':{'token':'PRIVATE'},'unexpected':'PRIVATE'})
+        result=runner.public_universe_receipt(core)
+        self.assertEqual(len(result['source_error']),300)
+        self.assertEqual(result['fetched_at'],'2026-10-19T10:04:25.964452+08:00')
+        self.assertEqual(result['source_api'],'https://query.sse.com.cn/sseQuery/commonQuery.do')
+        self.assertNotIn('PRIVATE',json.dumps(result))
+        core.putkv('universe_info',{'mode':'PRIVATE','count':True,'cache_reused':'true',
+            'fetched_at':'x'*100,'source':'https://evil.example/private',
+            'source_api':'https://query.sse.com.cn/commonQuery.do?token=PRIVATE',
+            'source_provenance':'PRIVATE'})
+        self.assertEqual(runner.public_universe_receipt(core),{})
 
     def test_closing_holiday_cannot_refresh_or_publish(self):
         core=self.closing_core();core.md.is_trading_day=lambda date:False;service=Mock()
@@ -256,6 +281,21 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(core.getkv('daily_plan:2026-10-19'),original)
         ai.assert_called_once_with(runner.ROOT,now=core.now(),signal_date='2026-10-16')
         news.assert_not_called()
+
+    def test_closing_errors_expose_only_bounded_public_market_data_messages(self):
+        class PublicMarketError(RuntimeError):pass
+        public='query.sse.com.cn: request failed after 3 attempts (HTTP 403) '+('x'*350)
+        private='PRIVATE_TOKEN_AND_LOCAL_PATH_C:/private/settings.json'
+        for error,detail in ((PublicMarketError(public),public[:300]),(RuntimeError(private),None)):
+            with self.subTest(error=type(error).__name__):
+                core=self.closing_core();core.md.MarketDataError=PublicMarketError
+                service=Mock();service.status={'status':'error','error':private}
+                service.refresh.side_effect=error
+                with patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()):
+                    result=runner.collect_after_close(core,service,core.now())
+                self.assertEqual(result['status'],'error')
+                self.assertEqual(result.get('error_detail'),detail)
+                self.assertNotIn(private,json.dumps(result))
 
     def test_evening_actual_collection_skips_recomputing_the_obsolete_report_first(self):
         core=self.closing_core()

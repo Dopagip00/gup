@@ -14,6 +14,178 @@ import core
 import app
 
 
+class SameDayUniverseCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.override = patch.object(core, 'DATA', Path(self.temp.name))
+        self.override.start()
+        self.service = core.Service()
+        self.moment = dt.datetime(2026, 10, 19, 21, 35, tzinfo=core.TZ)
+        self.target = '2026-10-19'
+        self.original_time = '2026-10-19T10:04:25.964452+08:00'
+        self.receipt = {'mode': 'shanghai', 'count': 2318, 'fetched_at': self.original_time}
+        core.putkv('universe_info', self.receipt)
+        with core.connect() as con:
+            con.executemany('INSERT INTO securities VALUES(?,?,1)',
+                            [(f'sh{600000 + i if i < 2000 else 603000 + i - 2000:06d}',
+                              f'测试证券{i}') for i in range(2318)])
+        self.network = core.md.MarketNetworkError('上交所官方证券列表接口均失败；query.sse.com.cn: request failed (HTTP 403)')
+
+    def tearDown(self):
+        self.override.stop()
+        self.temp.cleanup()
+
+    def cached(self, receipt=None, *, moment=None, target=None, error=None):
+        if receipt is not None:
+            core.putkv('universe_info', receipt)
+        return core._same_day_sse_universe_cache(target or self.target, moment or self.moment, error or self.network)
+
+    def test_verified_legacy_same_day_full_cache_preserves_original_verification(self):
+        rows, receipt = self.cached()
+        self.assertEqual(len(rows), 2318)
+        self.assertEqual(len({row['symbol'] for row in rows}), 2318)
+        self.assertEqual(receipt['fetched_at'], self.original_time)
+        self.assertEqual(receipt['last_live_attempt_at'], self.moment.isoformat())
+        self.assertTrue(receipt['cache_reused'])
+        self.assertEqual(receipt['source'], core.md.SSE_LIST_SOURCE)
+        self.assertEqual(receipt['source_provenance'], 'legacy_sse_engine_path')
+        self.assertNotIn('source_api', receipt)  # Never invent which old route succeeded.
+        self.assertIn('HTTP 403', receipt['source_error'])
+        self.assertEqual(core.getkv('universe_info'), self.receipt)  # Helper reads only.
+        # The prior UTC date can already be today's date in Shanghai.
+        _, utc_receipt = self.cached(dict(self.receipt, fetched_at='2026-10-18T16:00:00Z'))
+        self.assertEqual(utc_receipt['fetched_at'], '2026-10-18T16:00:00Z')
+
+    def test_repeated_reuse_keeps_legacy_provenance_and_original_time(self):
+        _, first = self.cached()
+        _, second = self.cached(first, moment=self.moment + dt.timedelta(minutes=10))
+        self.assertEqual(second['fetched_at'], self.original_time)
+        self.assertEqual(second['source_provenance'], 'legacy_sse_engine_path')
+        self.assertNotEqual(first['last_live_attempt_at'], second['last_live_attempt_at'])
+
+    def test_old_naive_future_missing_or_cross_day_receipts_are_rejected(self):
+        for value in ('2026-10-16T10:04:25+08:00', '2026-10-19T10:04:25',
+                      '2026-10-19T21:36:00+08:00', None, 'invalid', '2026-10-18T15:59:00Z'):
+            with self.subTest(value=value), self.assertRaises(core.md.MarketDataError):
+                self.cached(dict(self.receipt, fetched_at=value))
+
+    def test_cache_is_only_for_same_completed_trading_day_after_sixteen(self):
+        for moment, target in ((self.moment.replace(hour=15), self.target),
+                               (self.moment, '2026-10-16'),
+                               (self.moment.replace(tzinfo=None), self.target),
+                               (dt.datetime(2026, 10, 1, 21, tzinfo=core.TZ), '2026-10-01')):
+            with self.subTest(moment=moment, target=target), self.assertRaises(core.md.MarketDataError):
+                self.cached(moment=moment, target=target)
+
+    def test_count_mode_small_list_and_activity_mismatch_are_rejected(self):
+        for changes in ({'count': True}, {'count': 2318.0}, {'count': 0}, {'count': 2317},
+                        {'mode': 'watchlist'}, {'mode': 'all'}):
+            with self.subTest(changes=changes), self.assertRaises(core.md.MarketDataError):
+                self.cached(dict(self.receipt, **changes))
+        with core.connect() as con:
+            con.execute('UPDATE securities SET active=0 WHERE symbol<>?', ('sh600000',))
+        with self.assertRaises(core.md.MarketDataError):
+            self.cached(dict(self.receipt, count=1))
+
+    def test_only_official_source_and_known_route_may_be_reused(self):
+        for changes in ({'source': 'https://example.com/list'}, {'source': 123},
+                        {'source_api': 'https://example.com/query'},
+                        {'source_api': 'https://query.sse.com.cn.evil.test/query'}):
+            with self.subTest(changes=changes), self.assertRaises(core.md.MarketDataError):
+                self.cached(dict(self.receipt, **changes))
+        _, receipt = self.cached(dict(self.receipt, source=core.md.SSE_LIST_SOURCE,
+                                      source_api=core.md.SSE_LIST_APIS[1]))
+        self.assertEqual(receipt['source_api'], core.md.SSE_LIST_APIS[1])
+        self.assertEqual(receipt['source_provenance'], 'sse_live_verified')
+
+    def test_invalid_names_and_non_shanghai_codes_do_not_enter_cache_fallback(self):
+        for name in ('', '2318', 'sh600000', ' 测试证券 ', '测试\n证券'):
+            with self.subTest(name=name):
+                with core.connect() as con:
+                    con.execute('UPDATE securities SET name=? WHERE symbol=?', (name, 'sh600000'))
+                with self.assertRaises(core.md.MarketDataError):
+                    self.cached()
+        with core.connect() as con:
+            con.execute('UPDATE securities SET name=?,symbol=? WHERE symbol=?', ('测试证券', 'sz000001', 'sh600000'))
+        with self.assertRaises(core.md.MarketDataError):
+            self.cached()
+
+    def test_duplicate_rows_even_with_matching_declared_count_fail(self):
+        with core.connect() as con:
+            con.execute('ALTER TABLE securities RENAME TO original_test_securities')
+            con.execute('CREATE TABLE securities(symbol TEXT,name TEXT,active INTEGER)')
+            con.execute('INSERT INTO securities SELECT * FROM original_test_securities')
+            con.execute('UPDATE securities SET symbol=? WHERE symbol=?', ('sh600000', 'sh600001'))
+        with self.assertRaises(core.md.MarketDataError):
+            self.cached()
+
+    def test_structural_errors_never_qualify_and_public_error_does_not_leak_provider_text(self):
+        with self.assertRaises(core.md.MarketDataError):
+            self.cached(error=core.md.MarketDataError('query.sse.com.cn: request failed (HTTP 403)'))
+        sensitive = core.md.MarketNetworkError('HTTP 403 ' + 'PRIVATE token=https://user:secret@example.com/' * 100)
+        _, receipt = self.cached(error=sensitive)
+        self.assertLessEqual(len(receipt['source_error']), 300)
+        self.assertNotIn('PRIVATE', receipt['source_error'])
+        self.assertNotIn('secret', receipt['source_error'])
+        self.assertNotIn('http', receipt['source_error'])
+
+    def stop_after_universe(self, error, *, allow=False, mode='shanghai', live_rows=None):
+        class StopAfterUniverse(RuntimeError):
+            pass
+        cfg = dict(core.DEFAULTS, universe=mode)
+        core.putkv('config', cfg)
+        with patch.object(core, 'now', return_value=self.moment), \
+                patch.object(core, 'expected_date', return_value=self.target), \
+                patch.object(core.socket, 'socket'), \
+                patch.object(core.md, 'get_universe', side_effect=error, return_value=live_rows) as fetch, \
+                patch.object(core.md, 'fetch_history', return_value={'bars': []}), \
+                patch.object(core.concurrent.futures, 'ThreadPoolExecutor', side_effect=StopAfterUniverse):
+            with self.assertRaises(StopAfterUniverse if error is None or allow and mode == 'shanghai'
+                                   and isinstance(error, core.md.MarketNetworkError) else type(error)):
+                self.service.refresh(force=True, allow_same_day_universe_cache=allow)
+        fetch.assert_called_once_with(mode)
+
+    def test_refresh_explicit_cache_fallback_does_not_retimestamp_receipt(self):
+        self.stop_after_universe(self.network, allow=True)
+        receipt = core.getkv('universe_info')
+        self.assertTrue(receipt['cache_reused'])
+        self.assertEqual(receipt['fetched_at'], self.original_time)
+        self.assertEqual(receipt['count'], 2318)
+        with core.connect() as con:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM securities WHERE active=1').fetchone()[0], 2318)
+
+    def test_refresh_does_not_reuse_cache_by_default_outside_shanghai_or_for_bad_live_data(self):
+        for allow, mode, error in ((False, 'shanghai', self.network),
+                                   (True, 'all', self.network),
+                                   (True, 'shanghai', core.md.MarketDataError('上交所证券列表不完整'))):
+            with self.subTest(allow=allow, mode=mode, error=error):
+                self.stop_after_universe(error, allow=allow, mode=mode)
+                self.assertEqual(core.getkv('universe_info'), self.receipt)
+
+    def test_new_live_receipt_records_actual_official_route_and_resets_reuse_flag(self):
+        live = [{'symbol': 'sh600000', 'name': '测试证券', 'source': core.md.SSE_LIST_SOURCE,
+                 'source_api': core.md.SSE_LIST_APIS[1]}]
+        self.stop_after_universe(None, allow=True, live_rows=live)
+        receipt = core.getkv('universe_info')
+        self.assertFalse(receipt['cache_reused'])
+        self.assertEqual(receipt['fetched_at'], self.moment.isoformat())
+        self.assertEqual(receipt['source'], core.md.SSE_LIST_SOURCE)
+        self.assertEqual(receipt['source_api'], core.md.SSE_LIST_APIS[1])
+        self.assertEqual(receipt['source_provenance'], 'sse_live_verified')
+        self.assertNotIn('source_error', receipt)
+
+    def test_dashboard_discloses_original_cache_verification_and_full_count(self):
+        _, receipt = self.cached()
+        core.putkv('universe_info', receipt)
+        with patch.object(core, 'now', return_value=self.moment), \
+                patch.object(core, 'expected_date', return_value=self.target):
+            warnings = self.service.dashboard()['meta']['warnings']
+        transparent = next(text for text in warnings if '本次复用当日' in text)
+        self.assertIn(self.original_time, transparent)
+        self.assertIn('完整2318只名单', transparent)
+        self.assertIn('保留原核验时间', transparent)
+
+
 class DecisionEvidenceTests(unittest.TestCase):
     """Synthetic price process tests the real v3 fit, never a tuned real stock."""
 
