@@ -51,6 +51,8 @@ class FakeCore:
 class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+        self.watch=patch.object(runner,'update_watchlist',return_value={'status':'watch_only','count':5})
+        self.watch.start();self.addCleanup(self.watch.stop)
     def tearDown(self):self.temp.cleanup()
 
     def current_cache(self, core):
@@ -159,6 +161,25 @@ class RunnerTests(unittest.TestCase):
         load.assert_called_once_with(runner.ROOT,now=core.now(),signal_date='2026-10-16')
         self.assertEqual(core.getkv('ai_review'),receipt);self.assertEqual(result['status'],'pending')
         self.assertTrue(runner.public_key('ai_review'))
+
+    def test_subscription_ai_push_before_nine_prepares_observation_without_formal_publication(self):
+        core=FakeCore(dt.datetime(2026,10,19,8,25,tzinfo=runner.TZ));service=Mock()
+        with patch.object(runner,'collect_news') as news,patch.object(runner,'load_ai_review',return_value={'status':'partial'}),patch.object(runner.importlib,'import_module') as imports:
+            result=runner.run_stage('publish',core,service)
+        self.assertEqual(result['status'],'prepared');self.assertEqual(result['watchlist']['count'],5)
+        self.assertEqual(core.getkv('ai_review'),{'status':'partial'})
+        imports.assert_not_called();news.assert_not_called();service.refresh.assert_not_called()
+
+    def test_closing_prepares_the_next_official_session_with_real_current_time(self):
+        self.watch.stop()
+        moment=dt.datetime(2026,10,23,17,tzinfo=runner.TZ);core=FakeCore(moment)
+        core.md.is_trading_day=lambda date:dt.date.fromisoformat(date).weekday()<5
+        publish=Mock(return_value={'date':'2026-10-26','status':'watch_only','items':[{'symbol':'sh600001'}],'top_pick':{'symbol':'sh600001'}})
+        with patch.object(runner.importlib,'import_module',return_value=types.SimpleNamespace(publish=publish)):
+            result=runner.update_watchlist(core,Mock(),moment)
+        self.assertEqual(publish.call_args.kwargs['date'],'2026-10-26')
+        self.assertIs(publish.call_args.kwargs['now'],moment)
+        self.assertEqual(result['count'],1);self.assertEqual(result['top_symbol'],'sh600001')
 
     def test_news_precedes_cached_market_research_and_preserves_real_completion_time(self):
         core=FakeCore();old={'target_date':'2026-10-16','finished_at':'2026-10-16T16:00:00+08:00'};core.putkv('last_success',old)
@@ -317,13 +338,14 @@ class RunnerTests(unittest.TestCase):
             return {'core':core,'export_static':exporter}[name]
         failure={'stage':'publish','status':'error','close_research':{'status':'error','target_date':'2026-10-19'}}
         with patch.object(runner,'restore_cache',return_value=True),patch.object(runner,'restore_plans',return_value=0),patch.object(runner,'save_plans',return_value=0),patch.object(runner,'save_cache'),patch.object(runner,'needs_cached_recalculation',return_value=False),patch.object(runner,'run_stage',return_value=failure),patch.object(runner.importlib,'import_module',side_effect=module),patch.dict(os.environ,{'GITHUB_OUTPUT':''}):
-            code=runner.main(['publish','--engine-dir',str(engine),'--state-dir',str(self.root/'state'),'--output-dir',str(output)])
+            with patch.object(runner,'restore_watchlists',return_value=0),patch.object(runner,'save_watchlists',return_value=0):
+                code=runner.main(['publish','--engine-dir',str(engine),'--state-dir',str(self.root/'state'),'--output-dir',str(output)])
         self.assertEqual(code,1);self.assertNotIn('model_refresh',imported)
         self.assertEqual(json.loads((output/'run-status.json').read_text(encoding='utf-8'))['status'],'error')
         self.assertEqual(core.getkv('github_run_status')['close_research']['status'],'error')
 
     def test_collection_starts_market_work_only_between_eight_and_nine(self):
-        for hour,minute,second,expected in ((7,59,59,'skipped'),(8,0,0,'partial'),
+        for hour,minute,second,expected in ((7,59,59,'prepared'),(8,0,0,'partial'),
                 (8,59,59,'partial'),(9,0,0,'skipped'),(9,29,59,'skipped'),
                 (9,30,0,'late_skipped'),(15,59,59,'late_skipped')):
             with self.subTest(time=(hour,minute,second)):
@@ -473,6 +495,91 @@ class RunnerTests(unittest.TestCase):
         path.write_text(runner.canonical({'schema_version':1,'plans':plans,
             'sha256':hashlib.sha256(runner.canonical(plans).encode()).hexdigest()}),encoding='utf-8')
         return path
+
+    def watchlist(self):
+        item={'symbol':'sh600001','name':'观察样本','asof':'2026-10-16','score':55,
+              'eligible':False,'actionable':False,'model_validated':False}
+        return {'protocol':'daily-observation-v1','date':'2026-10-19','data_date':'2026-10-16',
+                'status':'watch_only','model_validated':False,'actionable':False,'eligible':False,
+                'generated_at':'2026-10-19T08:25:00+08:00','release_at':'2026-10-19T09:00:00+08:00',
+                'published_at':None,'items':[item],'top_pick':item}
+
+    def test_watchlist_archive_preserves_prepared_and_immutable_published_rankings(self):
+        database=self.root/'watch.sqlite3';make_db(database);core=FakeCore(dt.datetime(2026,10,19,10,tzinfo=runner.TZ),database=database)
+        value=self.watchlist();key='daily_watchlist:'+value['date'];path=self.root/'daily-watchlists.json'
+        with core.connect() as con:con.execute('INSERT INTO kv VALUES(?,?)',(key,runner.encode(value)))
+        self.assertTrue(runner.public_key(key));self.assertFalse(runner.public_key('daily_watchlist:private'))
+        self.assertEqual(runner.save_watchlists(core,path),1)
+        first=path.read_bytes();runner.save_watchlists(core,path);self.assertEqual(first,path.read_bytes())
+        with core.connect() as con:con.execute('DELETE FROM kv')
+        self.assertEqual(runner.restore_watchlists(path,core),1)
+        published=dict(value,published_at='2026-10-19T09:03:00+08:00')
+        with core.connect() as con:con.execute('UPDATE kv SET value=?',(runner.encode(published),))
+        self.assertEqual(runner.restore_watchlists(path,core),0,'Prepared snapshots never replace released ranks')
+        tampered=dict(published,items=[dict(value['items'][0],score=99)])
+        tampered['top_pick']=tampered['items'][0]
+        cohorts={value['date']:tampered}
+        path.write_text(runner.canonical({'schema_version':1,'watchlists':cohorts,'sha256':hashlib.sha256(runner.canonical(cohorts).encode()).hexdigest()}),encoding='utf-8')
+        with self.assertRaisesRegex(ValueError,'冲突'):runner.restore_watchlists(path,core)
+        with core.connect() as con:self.assertEqual(json.loads(con.execute('SELECT value FROM kv').fetchone()[0]),published)
+
+    def test_watchlist_archive_rejects_actionable_or_forged_release_records(self):
+        for mutate in (lambda x:x.update(published_at='2026-10-19T08:59:00+08:00'),
+                       lambda x:x['items'][0].update(actionable=True),
+                       lambda x:x.update(data_date='2026-10-19')):
+            value=self.watchlist();mutate(value)
+            with self.assertRaises(ValueError):runner.checked_watchlists({value['date']:value})
+
+    def test_released_watchlist_merges_new_risks_and_neither_old_cache_nor_old_archive_erases_withdrawal(self):
+        database=self.root/'merge-watch.sqlite3';make_db(database)
+        core=FakeCore(dt.datetime(2026,10,19,10,tzinfo=runner.TZ),database=database)
+        base=dict(self.watchlist(),published_at='2026-10-19T09:03:00+08:00',review_at='2026-10-19T09:04:00+08:00')
+        key='daily_watchlist:'+base['date'];path=self.root/'watch-archive.json'
+        def write(value):
+            cohorts={value['date']:value}
+            path.write_text(runner.canonical({'schema_version':1,'watchlists':cohorts,'sha256':hashlib.sha256(runner.canonical(cohorts).encode()).hexdigest()}),encoding='utf-8')
+        def saved():
+            with core.connect() as con:return json.loads(con.execute('SELECT value FROM kv WHERE key=?',(key,)).fetchone()[0])
+        with core.connect() as con:con.execute('INSERT INTO kv VALUES(?,?)',(key,runner.encode(base)))
+        fresh=dict(base,review_at='2026-10-19T09:11:00+08:00',warnings=['新增已知风险'],
+            alerts=[{'symbol':'sh600001','source':'官方公告已知风险','reason':'风险提示','withdrawn':True,'observed_at':'2026-10-19T09:10:00+08:00'}],
+            withdrawn_symbols=['sh600001'],rankings_immutable=True,
+            current_risk_verification={'announcements_status':'verified','evidence_cutoff':'2026-10-19T09:11:00+08:00'})
+        write(fresh);self.assertEqual(runner.restore_watchlists(path,core),1)
+        self.assertEqual(saved()['items'],base['items']);self.assertEqual(saved()['published_at'],base['published_at'])
+        write(base);self.assertEqual(runner.restore_watchlists(path,core),0)
+        self.assertEqual(saved()['withdrawn_symbols'],['sh600001'])
+        old_hash=json.loads(path.read_text(encoding='utf-8'))['sha256']
+        runner.save_watchlists(core,path)
+        archive=json.loads(path.read_text(encoding='utf-8'));self.assertNotEqual(archive['sha256'],old_hash)
+        self.assertEqual(archive['watchlists'][base['date']]['withdrawn_symbols'],['sh600001'])
+        with core.connect() as con:con.execute('UPDATE kv SET value=? WHERE key=?',(runner.encode(base),key))
+        self.assertEqual(runner.restore_watchlists(path,core),1)
+        self.assertEqual(saved()['withdrawn_symbols'],['sh600001'])
+
+    def test_released_watchlist_rejects_any_original_ranking_or_timestamp_change(self):
+        base=dict(self.watchlist(),published_at='2026-10-19T09:03:00+08:00')
+        base['items'].append(dict(base['items'][0],symbol='sh600002',score=50))
+        moment=dt.datetime(2026,10,19,10,tzinfo=runner.TZ)
+        def reorder(value):value['items'].reverse();value['top_pick']=value['items'][0]
+        def rescore(value):value['items'][0]['score']=99;value['top_pick']=value['items'][0]
+        for mutate in (reorder,rescore,lambda value:value.update(generated_at='2026-10-19T08:26:00+08:00'),
+                       lambda value:value.update(published_at='2026-10-19T09:04:00+08:00'),
+                       lambda value:value.update(top_pick=value['items'][1])):
+            incoming=copy.deepcopy(base);mutate(incoming)
+            with self.assertRaisesRegex(ValueError,'冲突'):runner.merge_watchlist_risks(base,incoming,moment)
+
+    def test_future_risk_review_or_observation_cannot_enter_a_released_cohort(self):
+        base=dict(self.watchlist(),published_at='2026-10-19T09:03:00+08:00')
+        fresh=dict(base,review_at='2026-10-19T09:11:00+08:00',
+            alerts=[{'symbol':'sh600001','source':'官方公告已知风险','reason':'风险提示','withdrawn':True,'observed_at':'2026-10-19T09:10:00+08:00'}],
+            withdrawn_symbols=['sh600001'],current_risk_verification={'evidence_cutoff':'2026-10-19T09:11:00+08:00'})
+        moment=dt.datetime(2026,10,19,10,tzinfo=runner.TZ)
+        for mutate in (lambda value:value.update(review_at='2026-10-19T11:00:00+08:00'),
+                       lambda value:value['current_risk_verification'].update(evidence_cutoff='2026-10-19T11:00:00+08:00'),
+                       lambda value:value['alerts'][0].update(observed_at='2026-10-19T11:00:00+08:00')):
+            incoming=copy.deepcopy(fresh);mutate(incoming)
+            with self.assertRaises(ValueError):runner.merge_watchlist_risks(base,incoming,moment)
 
     def test_friday_archive_survives_monday_seed_fallback_and_produces_original_d2_sell(self):
         database=self.root/'monday.sqlite3';make_db(database);core=FakeCore(database=database)

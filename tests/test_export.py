@@ -1,8 +1,10 @@
 import importlib.util
+import contextlib
 import datetime as dt
 import json
 from pathlib import Path
 import sys
+import sqlite3
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -12,6 +14,29 @@ spec=importlib.util.spec_from_file_location('export_static',Path(__file__).resol
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
 class PublicationTests(unittest.TestCase):
+    def test_after_close_keeps_today_primary_and_prepares_next_session_separately(self):
+        core=SimpleNamespace(md=SimpleNamespace(is_trading_day=lambda day:dt.date.fromisoformat(day).weekday()<5))
+        tz=dt.timezone(dt.timedelta(hours=8))
+        self.assertEqual(module.watchlist_export_dates(core,dt.datetime(2026,10,23,17,tzinfo=tz)),('2026-10-23','2026-10-26'))
+        self.assertEqual(module.watchlist_export_dates(core,dt.datetime(2026,10,23,9,tzinfo=tz)),('2026-10-23',None))
+        self.assertEqual(module.watchlist_export_dates(core,dt.datetime(2026,10,24,10,tzinfo=tz)),('2026-10-26',None))
+    def test_observation_export_is_compact_non_actionable_and_preserves_real_preparation_time(self):
+        row={'symbol':'sh600001','name':'观察','asof':'2026-10-19','score':53,
+             'components':{'technical':80,'financial':None,'weights':{'technical':.6,'financial':.4},'private':'PRIVATE'},
+             'verification':{'chase_passed':True,'private':'PRIVATE'},'reasons':['原因'*1000]*50,
+             'risk_notes':['风险']*20,'actionable':True,'entry_low':99,'prediction':{'private':'PRIVATE'}}
+        source={'protocol':'daily-observation-v1','date':'2026-10-20','data_date':'2026-10-19',
+                'prepared_at':'2026-10-20T08:25:00+08:00','release_at':'2026-10-20T09:00:00+08:00',
+                'published_at':None,'items':[row]*10,'top_pick':row,'private':'PRIVATE',
+                'verification':{'ai_status':'partial','private':'PRIVATE'}}
+        result=module.public_watchlist(source)
+        self.assertEqual(len(result['items']),5);self.assertEqual(result['top_pick'],result['items'][0])
+        self.assertIsNone(result['published_at']);self.assertEqual(result['prepared_at'],source['prepared_at'])
+        self.assertFalse(result['actionable']);self.assertFalse(result['items'][0]['model_validated'])
+        self.assertIsNone(result['items'][0]['entry_low']);self.assertNotIn('PRIVATE',json.dumps(result))
+        self.assertLessEqual(len(result['items'][0]['reasons']),5)
+        self.assertTrue(source['items'][0]['actionable'])
+
     def test_system_json_exposes_bounded_ai_state_without_copying_the_raw_review(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);engine=root/'engine';static=engine/'static';static.mkdir(parents=True)
@@ -23,11 +48,18 @@ class PublicationTests(unittest.TestCase):
                     'run_url':'https://chatgpt.com/c/task','run_url_scope':'task_chat',
                     'reviewed_symbols':[],'risk_vetoes':[],'raw_private':'PRIVATE_MARKER'}}
             fake=SimpleNamespace(BASE=engine,now=lambda:dt.datetime(2026,10,19,9,tzinfo=dt.timezone(dt.timedelta(hours=8))),
-                md=SimpleNamespace(get_calendar=lambda year:{},CalendarUnavailable=RuntimeError),
+                md=SimpleNamespace(get_calendar=lambda year:{},is_trading_day=lambda day:True,CalendarUnavailable=RuntimeError),
                 getkv=lambda key,default=None:receipt if key=='ai_review' else default)
+            @contextlib.contextmanager
+            def connection():
+                con=sqlite3.connect(':memory:');con.execute('CREATE TABLE kv(key TEXT,value TEXT)')
+                try:yield con
+                finally:con.close()
+            fake.connect=connection
             service=Mock();service.dashboard.return_value={'meta':{'data_date':'2026-10-16'},'index':None,'stocks':[]}
             service.longterm.return_value={};service.reports.return_value=[]
             with patch.dict(sys.modules,{'core':fake,'daily_plan':SimpleNamespace(read=lambda:{}),
+                                        'daily_watchlist':SimpleNamespace(read=lambda **kwargs:{'protocol':'daily-observation-v1','date':'2026-10-19','items':[]}),
                                         'forecast_audit':SimpleNamespace(evaluate=lambda core:{})}):
                 module.export_site(root/'public',service,engine_dir=engine)
             result=json.loads((root/'public/data/system.json').read_text(encoding='utf-8'))
@@ -35,6 +67,9 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(result['ai_review']['errors'],['当日复核待完成'])
             self.assertEqual(result['ai_review']['reviewed_count'],0)
             self.assertNotIn('PRIVATE_MARKER',json.dumps(result));self.assertNotIn('review',result['ai_review'])
+            watch=json.loads((root/'public/data/daily-watchlist.json').read_text(encoding='utf-8'))
+            self.assertEqual(watch['protocol'],'daily-observation-v1');self.assertFalse(watch['actionable'])
+            self.assertEqual(json.loads((root/'public/data/watchlists.json').read_text(encoding='utf-8')),[])
 
     def test_never_publish_account_or_csrf_or_host_path(self):
         data={'meta':{'now':'x','csrf_token':'secret','project_path':'private','config':{'token':'private'}},

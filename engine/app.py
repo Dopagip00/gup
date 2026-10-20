@@ -51,6 +51,9 @@ def make_handler(service, port):
                 if url.path == '/api/daily-plan':
                     import daily_plan
                     return self.send(daily_plan.read(query.get('date', [None])[0]))
+                if url.path == '/api/daily-watchlist':
+                    import daily_watchlist
+                    return self.send(daily_watchlist.read(query.get('date', [None])[0], service=service))
                 if url.path == '/api/system':
                     return self.send({'version': json.loads((core.BASE/'version.json').read_text(encoding='utf-8')), 'mode':'manual_research', 'hosted':False,
                         'migration':{'backup_command':'backup.cmd','update_command':'apply-update.cmd','guide':'MIGRATION.md'},

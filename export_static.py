@@ -15,6 +15,56 @@ META_KEYS = {'app_name','now','status','last_success','data_date','report_date',
              'daily_plan_status','daily_plan_message','exclusion_policy','model_quality'}
 
 
+def public_watchlist(value):
+    """A small independent ranking, never a duplicate of news/model payloads."""
+    keys={'protocol','date','data_date','signal_date','generated_at','prepared_at','prepared_data_date',
+          'release_at','published_at','publication_timing','late','status','model_validated','actionable',
+          'eligible','coverage','verification','warnings','method','scope','message','rankings_immutable',
+          'release_basis','review_at','current_risk_verification'}
+    result={key:copy.deepcopy(value[key]) for key in keys if key in value}
+    item_keys={'symbol','name','asof','score','components','reasons','risk_notes','verification'}
+    verification_keys={'quote_date','quote_consistent','price_history_complete','chase_passed',
+        'financial_complete','financial_data_date','financial_report_date','financial_publication_date',
+        'model_validation_status','announcements_status','session_status','ai_status',
+        'known_risk_veto_count','evidence_cutoff','financial_status','ai_reviewed'}
+    def item(raw):
+        row={key:copy.deepcopy(raw[key]) for key in item_keys if key in raw}
+        row['verification']={key:copy.deepcopy(v) for key,v in raw.get('verification',{}).items() if key in verification_keys}
+        components=raw.get('components',{})
+        row['components']={key:copy.deepcopy(components[key]) for key in ('technical','financial','atr_pct','return_5d_pct','ma20_deviation_pct') if key in components}
+        row['components']['weights']={key:components.get('weights',{}).get(key) for key in ('technical','financial')}
+        for key,limit in (('reasons',5),('risk_notes',8)):
+            row[key]=[str(text)[:300] for text in raw.get(key,[])[:limit]]
+        row.update(model_validated=False,eligible=False,actionable=False,
+                   entry_low=None,entry_high=None,stop_loss=None,take_profit=None,max_position_pct=None)
+        return row
+    result['items']=[item(raw) for raw in (value.get('items') or [])[:5] if isinstance(raw,dict)]
+    result['top_pick']=result['items'][0] if result['items'] else None
+    result['alerts']=[{key:raw[key] for key in ('symbol','reason','source','withdrawn') if key in raw}
+                      for raw in (value.get('alerts') or [])[:5] if isinstance(raw,dict)]
+    result['withdrawn_symbols']=[s for s in (value.get('withdrawn_symbols') or [])[:5] if isinstance(s,str) and re.fullmatch(r'sh\d{6}',s)]
+    result['verification']={key:copy.deepcopy(v) for key,v in value.get('verification',{}).items() if key in verification_keys}
+    if isinstance(value.get('current_risk_verification'),dict):
+        result['current_risk_verification']={key:copy.deepcopy(v) for key,v in value['current_risk_verification'].items() if key in verification_keys}
+    result['warnings']=[str(text)[:500] for text in value.get('warnings',[])[:12]]
+    result.update(model_validated=False,eligible=False,actionable=False)
+    return result
+
+
+def watchlist_export_dates(core, moment):
+    today=moment.date()
+    trading=core.md.is_trading_day(today.isoformat())
+    if trading and moment.time().replace(tzinfo=None)<dt.time(16):
+        return today.isoformat(),None
+    for offset in range(1,41):
+        candidate=today+dt.timedelta(days=offset)
+        if core.md.is_trading_day(candidate.isoformat()):
+            # A trading day's published ranking remains the primary all day.
+            # A separate next file and dated archive expose future preparation.
+            return (today.isoformat(),candidate.isoformat()) if trading else (candidate.isoformat(),None)
+    return today.isoformat(),None
+
+
 def public_dashboard(value):
     result = {key: copy.deepcopy(value.get(key)) for key in ('index','stocks')}
     table_keys = {'symbol','name','date','close','raw_close','change_pct','score','eligible','excluded',
@@ -88,6 +138,7 @@ def export_site(output_dir, service, engine_dir=None):
     import core
     import daily_plan
     import forecast_audit
+    import daily_watchlist
     output = Path(output_dir).resolve()
     engine = Path(engine_dir or core.BASE).resolve()
     version = json.loads((engine/'version.json').read_text(encoding='utf-8'))
@@ -129,6 +180,21 @@ def export_site(output_dir, service, engine_dir=None):
     dashboard = public_dashboard(full_dashboard)
     write('data/dashboard.json',dashboard)
     write('data/daily-plan.json',daily_plan.read())
+    moment=core.now()
+    watch_date,next_watch_date=watchlist_export_dates(core,moment)
+    write('data/daily-watchlist.json',public_watchlist(daily_watchlist.read(date=watch_date,service=service,now=moment)))
+    if next_watch_date:
+        write('data/daily-watchlist-next.json',public_watchlist(daily_watchlist.read(date=next_watch_date,service=service,now=moment)))
+    watch_index=[]
+    with core.connect() as con:
+        watch_rows=con.execute("SELECT key,value FROM kv WHERE key LIKE 'daily_watchlist:%' ORDER BY key DESC").fetchall()
+    for key,raw in watch_rows:
+        date=key[len('daily_watchlist:'):]
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',date):continue
+        value=json.loads(raw)
+        write('data/watchlists/'+date+'.json',public_watchlist(daily_watchlist.read(date=date,service=service,now=moment)))
+        watch_index.append({'date':date,'data_date':value.get('data_date'),'published_at':value.get('published_at')})
+    write('data/watchlists.json',watch_index)
     write('data/forecast-audit.json',forecast_audit.evaluate(core))
     write('data/longterm.json',service.longterm())
     write('data/quotes.json',{'quotes':[], 'status':'GitHub Pages 为收盘研究快照，不提供实时或盘中自动报价。'})

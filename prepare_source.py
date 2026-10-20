@@ -9,7 +9,7 @@ import shutil
 import sqlite3
 
 HERE=Path(__file__).resolve().parent
-ENGINE_FILES={'app.py','core.py','daily_plan.py','forecast.py','strategy.py','market_data.py','longterm.py',
+ENGINE_FILES={'app.py','core.py','daily_plan.py','daily_watchlist.py','forecast.py','strategy.py','market_data.py','longterm.py',
               'research_refresh.py','model_refresh.py','forecast_audit.py','portability.py','agent_runner.py','cloud_sync.py','version.json',
               'runtime.ps1','start.cmd','start.ps1','stop.cmd','stop.ps1','backup.cmd','backup.ps1',
               'update-now.cmd','update-now.ps1','apply-update.cmd','apply-update.ps1','MIGRATION.md',
@@ -42,13 +42,15 @@ def write_seed_parts(seed):
     return manifest_path, manifest
 
 
-def prepare(platform):
+def prepare(platform, *, source_only=False):
     from runner import clean_value,public_key
     platform=Path(platform).resolve();engine=HERE/'engine';engine.mkdir(exist_ok=True)
     for name in ENGINE_FILES:
         if (platform/name).is_file(): shutil.copyfile(platform/name,engine/name)
     for folder in ('static','tests'):
         shutil.copytree(platform/folder,engine/folder,dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+    if source_only:
+        return {'engine':str(engine),'source_only':True,'seed_unchanged':True}
     source=sqlite3.connect((platform/'data/market.sqlite3').as_uri()+'?mode=ro',uri=True)
     source.row_factory=sqlite3.Row
     seed=HERE/'seed/research.json.gz';seed.parent.mkdir(exist_ok=True)
@@ -86,4 +88,6 @@ def prepare(platform):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--platform',default=str(HERE.parent/'ashare-platform'))
-    print(json.dumps(prepare(parser.parse_args().platform),ensure_ascii=False))
+    parser.add_argument('--source-only',action='store_true',help='Only sync source; preserve the existing public seed and parts')
+    args=parser.parse_args()
+    print(json.dumps(prepare(args.platform,source_only=args.source_only),ensure_ascii=False))

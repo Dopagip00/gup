@@ -10,15 +10,72 @@ class Element{
   setAttribute(){}addEventListener(){}after(){}prepend(...nodes){this.children.unshift(...nodes);}getBoundingClientRect(){return {width:0,height:0};}
   showModal(){this.open=true;}querySelectorAll(){return [];}querySelector(){return new Element();}
 }
-function app(){
+function app(options={}){
   const nodes=new Map(),document={getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);},createElement:tag=>new Element(tag),createTextNode:value=>Object.assign(new Element('#text'),{textContent:value}),createDocumentFragment:()=>new Element('#fragment')};
   document.getElementById('min-score').value='0';document.getElementById('stock-sort').value='prediction';
-  const sandbox={document,window:{PagesResearch:{}},location:{hostname:'dopagip00.github.io'},structuredClone,URL,requestAnimationFrame:()=>{},Intl,Date,setTimeout,clearTimeout,fetch:()=>{throw Error('unexpected fetch');}};
-  vm.runInNewContext(source.slice(0,source.lastIndexOf("document.querySelectorAll('[data-view]')"))+"\nglobalThis.ui={state,shortEligible,renderStocks,renderDashboard,loadDashboard,renderPrediction,renderAIReview,renderTopPick,disableDisconnectedResearch,openStock,setApi:fn=>api=fn,setRenderDetail:fn=>renderDetail=fn};",sandbox);
+  class FixedDate extends Date{constructor(...args){super(...(args.length?args:[options.now??Date.now()]));}static now(){return options.now??Date.now();}}
+  const sandbox={document,window:{PagesResearch:{}},location:{hostname:'dopagip00.github.io'},structuredClone,URL,requestAnimationFrame:()=>{},Intl,Date:FixedDate,setTimeout,clearTimeout,fetch:()=>{throw Error('unexpected fetch');}};
+  vm.runInNewContext(source.slice(0,source.lastIndexOf("document.querySelectorAll('[data-view]')"))+"\nglobalThis.ui={state,shortEligible,renderStocks,renderDashboard,loadDashboard,renderPrediction,renderAIReview,renderTopPick,renderDailyWatchlist,loadDailyWatchlist,disableDisconnectedResearch,openStock,setApi:fn=>api=fn,setRenderDetail:fn=>renderDetail=fn};",sandbox);
   return {ui:sandbox.ui,nodes,get:id=>document.getElementById(id)};
 }
 function stock(overrides={}){return {symbol:'sh601811',name:'技术分73的样本',score:73,date:'2026-10-16',eligible:false,prediction:{available:true,eligible:false,rank_value:null,expected_return_pct:5},entry_low:10,entry_high:11,stop_loss:9,take_profit:12,...overrides};}
 function qualified(){return stock({eligible:true,chase_risk:{version:'anti-chase-v1',blocked:false,gate_passed:true},prediction:{model_version:'ridge-cycle-v3',validation_protocol:'purged-expanding-3x60-decision-v1',available:true,eligible:true,validation_decision:{protocol:'fixed-nonoverlap-positive-net-v1',eligible:true},rank_value:1,expected_return_pct:2}});}
+const WATCH_NOW=Date.parse('2026-10-20T09:15:00+08:00');
+function watchlist(overrides={}){
+  const first={symbol:'sh600000',name:'观察样本',asof:'2026-10-19',score:73.5,components:{technical:80,financial:63.75},reasons:['量价规则相对靠前','财务字段已取得'],risk_notes:['模型未通过正式买入验证','公告与AI未完整核验'],verification:{announcements_status:'unverified',session_status:'unverified',ai_status:'unverified'},eligible:false,actionable:false,entry_low:9876.54,entry_high:9999.99,stop_loss:8765.43,take_profit:12345.67};
+  return {protocol:'daily-observation-v1',date:'2026-10-20',data_date:'2026-10-19',signal_date:'2026-10-19',generated_at:'2026-10-20T08:55:00+08:00',release_at:'2026-10-20T09:00:00+08:00',published_at:'2026-10-20T09:02:00+08:00',publication_timing:'on_time',late:false,status:'watch_only',model_validated:false,items:[first],top_pick:first,verification:first.verification,warnings:[],...overrides};
+}
+test('an unqualified observation can be visible without becoming a formal buy or showing any supplied trade price',()=>{
+  const a=app({now:WATCH_NOW}),data=watchlist();a.ui.state.connected=true;a.ui.state.dashboard={meta:{mode:'manual_research'},stocks:[]};a.ui.renderTopPick([]);a.ui.renderDailyWatchlist(data);
+  assert.equal(a.get('watchlist-body').children.length,1);assert.equal(a.get('watch-priority-name').textContent,'观察样本 · 600000.SH');assert.equal(a.get('watch-priority-score').textContent,'73.5 / 100');
+  assert.equal(a.ui.state.topPick,null);assert.equal(a.ui.shortEligible(data.items[0]),false);assert.equal(a.get('pick-metrics').hidden,true);
+  const displayed=a.get('watchlist-body').textContent+a.get('watch-priority-reason').textContent;for(const price of ['9876.54','9999.99','8765.43','12345.67'])assert(!displayed.includes(price));
+  assert.match(a.get('watchlist-body').textContent,/仅观察 · 未通过正式买入验证/);assert.match(a.get('watchlist-summary').textContent,/不提供未经验证的买卖价位/);
+  assert.match(a.get('watch-priority-verification').textContent,/公告未完成完整核验/);assert.match(a.get('watch-priority-verification').textContent,/AI未完成完整核验/);assert.match(a.get('watch-priority-verification').textContent,/未核验不代表安全/);
+});
+test('observation dates distinguish the assigned day, previous close, actual generation and a late release',()=>{
+  const a=app({now:WATCH_NOW});a.ui.renderDailyWatchlist(watchlist({publication_timing:'late',late:true,published_at:'2026-10-20T09:12:00+08:00'}));
+  const dates=a.get('watchlist-dates').textContent;assert.match(dates,/榜单所属：2026-10-20/);assert.match(dates,/截至前收盘：2026-10-19/);assert.match(dates,/实际生成：/);assert.match(dates,/实际发布：/);assert.match(dates,/迟到补发/);
+});
+test('prepared or future observations cannot expose their ranking before a real release',()=>{
+  for(const [now,overrides] of [
+    [Date.parse('2026-10-20T08:59:00+08:00'),{}],
+    [WATCH_NOW,{published_at:null,publication_timing:'prepared'}],
+    [WATCH_NOW,{date:'2026-10-21',release_at:'2026-10-21T09:00:00+08:00',published_at:null,publication_timing:'prepared'}],
+    [WATCH_NOW,{published_at:'2026-10-20T09:20:00+08:00'}]
+  ]){
+    const a=app({now});a.ui.renderDailyWatchlist(watchlist(overrides));assert.equal(a.get('watchlist-body').children.length,0);assert.equal(a.get('watch-priority-metrics').hidden,true);assert.doesNotMatch(a.get('watch-priority-name').textContent,/观察样本/);assert.match(a.get('watchlist-empty').textContent,/尚未正式发布/);
+  }
+});
+test('old and selected historical observations never acquire today labels or substitute another day',()=>{
+  const data=watchlist({date:'2026-10-19',data_date:'2026-10-16',signal_date:'2026-10-16',generated_at:'2026-10-19T08:55:00+08:00',release_at:'2026-10-19T09:00:00+08:00',published_at:'2026-10-19T09:02:00+08:00'});
+  const latest=app({now:WATCH_NOW});latest.ui.renderDailyWatchlist(data);assert.match(latest.get('watchlist-title').textContent,/2026-10-19.*历史记录/);assert.match(latest.get('watchlist-alert').textContent,/尚未取得 2026-10-20/);assert.doesNotMatch(latest.get('watch-priority-label').textContent,/今日/);
+  const selected=app({now:WATCH_NOW});selected.ui.state.historyDate='2026-10-19';selected.ui.renderDailyWatchlist(data);assert.equal(selected.get('watchlist-body').children.length,1);assert.match(selected.get('watchlist-title').textContent,/历史记录/);assert.match(selected.get('watchlist-dates').textContent,/截至前收盘：2026-10-16/);
+  selected.ui.renderDailyWatchlist(watchlist());assert.equal(selected.get('watchlist-body').children.length,0);assert.match(selected.get('watchlist-empty').textContent,/请求 2026-10-19，取得记录属于 2026-10-20/);assert.equal(selected.get('watch-priority-metrics').hidden,true);
+});
+test('withdrawing the immutable original first observation never promotes a runner-up',()=>{
+  const a=app({now:WATCH_NOW}),data=watchlist(),second={...data.items[0],symbol:'sh600001',name:'第二观察'};data.items.push(second);data.withdrawn_symbols=['sh600000'];data.alerts=[{symbol:'sh600000',reason:'新增风险公告',withdrawn:true}];a.ui.renderDailyWatchlist(data);
+  assert.match(a.get('watch-priority-name').textContent,/原最优先观察股已撤销/);assert.doesNotMatch(a.get('watch-priority-name').textContent,/第二观察/);assert.equal(a.get('watch-priority-metrics').hidden,true);assert.equal(a.get('watchlist-body').children.length,2);assert.match(a.get('watchlist-body').children[0].textContent,/已撤销观察/);assert.match(a.get('watchlist-alert').textContent,/新增风险公告/);
+});
+test('observation names, reasons and risks render only as text and absent finance stays unverified',()=>{
+  const a=app({now:WATCH_NOW}),data=watchlist(),attack='<img src=x onerror=alert(1)>';data.items[0].name=attack;data.items[0].reasons=[attack];data.items[0].risk_notes=[attack];data.items[0].components.financial=null;a.ui.renderDailyWatchlist(data);
+  const row=a.get('watchlist-body').children[0];assert.equal(row.children[1].children[0].textContent,attack);assert.equal(row.children[3].textContent,attack);assert.match(row.textContent,/财务 未核验/);assert.equal(a.get('watch-priority-reason').textContent,attack);
+  function tags(element){return [element.tag,...element.children.flatMap(child=>child?.children?tags(child):[])];}assert(!tags(row).includes('img'));
+});
+test('hard risk or insufficient data keeps a genuine empty observation list without a fabricated first',()=>{
+  const a=app({now:WATCH_NOW});a.ui.renderDailyWatchlist(watchlist({status:'insufficient_data',items:[],top_pick:null,warnings:['所有候选未通过追高风险或完整收盘检查']}));
+  assert.equal(a.get('watchlist-body').children.length,0);assert.match(a.get('watchlist-empty').textContent,/追高风险或完整收盘检查/);assert.equal(a.get('watch-priority-metrics').hidden,true);assert.doesNotMatch(a.get('watch-priority-name').textContent,/观察样本/);
+});
+test('an absent old-version watchlist endpoint cannot disconnect a working dashboard',async()=>{
+  const a=app({now:WATCH_NOW}),dashboard={meta:{data_date:'2026-10-19'},stocks:[]};a.ui.state.connected=true;a.ui.state.dashboard=dashboard;a.ui.setApi(async()=>{throw Error('404');});await a.ui.loadDailyWatchlist();
+  assert.equal(a.ui.state.connected,true);assert.equal(a.ui.state.dashboard,dashboard);assert.equal(a.ui.state.dailyWatchlist,null);assert.match(a.get('watchlist-empty').textContent,/旧版快照可能尚未提供此功能/);assert.equal(a.get('watchlist-refresh').disabled,false);
+});
+test('late latest-watchlist responses cannot overwrite a newer selected historical request',async()=>{
+  const a=app({now:WATCH_NOW}),pending=[],paths=[];a.ui.setApi(path=>{paths.push(path);return new Promise(resolve=>pending.push(resolve));});
+  const first=a.ui.loadDailyWatchlist();a.ui.state.historyDate='2026-10-19';const second=a.ui.loadDailyWatchlist();const historical=watchlist({date:'2026-10-19',data_date:'2026-10-16',release_at:'2026-10-19T09:00:00+08:00',published_at:'2026-10-19T09:02:00+08:00'});
+  pending[1](historical);await second;pending[0](watchlist());await first;
+  assert.deepEqual(paths,['/api/daily-watchlist','/api/daily-watchlist?date=2026-10-19']);assert.equal(a.ui.state.dailyWatchlist.date,'2026-10-19');assert.match(a.get('watchlist-title').textContent,/2026-10-19.*历史记录/);
+});
 test('a missing selected date keeps the connection and selection while clearly showing the actual market day',async()=>{
   const a=app();a.ui.state.historyDate='2026-10-19';a.get('history-date').value='2026-10-19';
   a.ui.setApi(async()=>({meta:{data_date:'2026-10-16',report_date:'2026-10-16',snapshot_transport:{mode:'live',generated_at:'2026-10-19T20:00:00+08:00'},report_selection:{status:'unavailable',requested_date:'2026-10-19',actual_date:'2026-10-16'}},stocks:[stock()]}));

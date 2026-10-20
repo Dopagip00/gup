@@ -67,13 +67,13 @@
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),REQUEST_TIMEOUT);
       try{
         const response=await fetch(new URL(path,baseUrl()),{cache:'no-store',signal:controller.signal});
-        if(!response.ok){const error=new Error(`研究文件暂不可用（${response.status}）`);error.retryable=response.status>=500||response.status===408||response.status===429;throw error;}
+        if(!response.ok){const error=new Error(`研究文件暂不可用（${response.status}）`);error.httpStatus=response.status;error.retryable=response.status>=500||response.status===408||response.status===429;throw error;}
         return await response.json();
       }catch(error){last=error;if(error.retryable===false)break;}
       finally{clearTimeout(timer);}
       if(attempt+1<ATTEMPTS)await new Promise(resolve=>setTimeout(resolve,200));
     }
-    throw new Error(last?.name==='AbortError'?'公开快照读取超时，请重试。':last?.message||'公开快照读取失败');
+    throw Object.assign(new Error(last?.name==='AbortError'?'公开快照读取超时，请重试。':last?.message||'公开快照读取失败'),{httpStatus:last?.httpStatus});
   }
   let manifest=null,checked=0,checking=null;
   const files=new Map(),memory=new Map(),memoryBytes=new Map();
@@ -89,7 +89,7 @@
     return manifest;
   }
   function storageKey(key){return `gup:research-only:${CACHE_SCHEMA}:${baseUrl().href}:${key}`;}
-  function protectedCache(key){return key===storageKey('dashboard:latest')||key===storageKey('daily-plan');}
+  function protectedCache(key){return key===storageKey('dashboard:latest')||key===storageKey('daily-plan')||key===storageKey('daily-watchlist');}
   function reportDates(value,m){
     if(!Array.isArray(value))throw new Error('历史报告清单结构无效');
     const dates=value.map(report=>typeof report==='string'?report:report?.date||report?.report_date);
@@ -109,6 +109,11 @@
       if(path==='data/reports.json')reportDates(value,m);
       if(path.startsWith('data/reports/') && (!Array.isArray(value.stocks) || !validDate(value.meta?.data_date) || value.meta.data_date>m.data_date || value.meta?.report_date!==path.slice(-15,-5)))throw new Error('历史报告日期无效');
       if(path==='data/daily-plan.json' && (!validDate(value.date) || value.date>clock(new Date(m.generated_at)).date || (value.sell!==undefined&&!Array.isArray(value.sell))))throw new Error('日报日期或结构无效');
+      if(path==='data/daily-watchlist.json'||path.startsWith('data/watchlists/')){
+        if(value.protocol!=='daily-observation-v1'||!validDate(value.date)||!Array.isArray(value.items)||value.items.length>5||value.model_validated!==false||value.actionable!==false)throw new Error('独立观察榜协议或结构无效');
+        if(value.data_date!==null&&(!validDate(value.data_date)||value.data_date>m.data_date))throw new Error('观察榜引用了快照以后的行情');
+        if(path.startsWith('data/watchlists/')&&value.date!==path.slice(-15,-5))throw new Error('观察榜历史日期不一致');
+      }
       if(path.startsWith('data/stocks/') && (value.stock?.symbol!==path.slice(-13,-5) || !validDate(value.stock?.date) || value.stock.date>m.data_date))throw new Error('个股代码或日期与快照不一致');
       if(path==='data/longterm.json' && (!Array.isArray(value.stocks) || !validDate(value.as_of) || value.as_of>m.data_date))throw new Error('长线研究日期或结构无效');
     }
@@ -200,6 +205,26 @@
     }
     return data;
   }
+  function gateWatchlist(value,calendars,requested=null,now=new Date()){
+    const data=structuredClone(value),today=clock(now),release=Date.parse(data.release_at),generated=Date.parse(data.generated_at);
+    const hide=(status,message)=>({...data,status,items:[],top_pick:null,eligible:false,actionable:false,model_validated:false,message});
+    if(trading(data.date,calendars)!==true)return hide('closed','交易日历尚未核准或该日休市，不揭示观察榜。');
+    if(!Number.isFinite(release)||clock(new Date(release)).date!==data.date||clock(new Date(release)).time!=='09:00'||!Number.isFinite(generated)||generated>now.getTime()+300000)return hide('unavailable','观察榜准备或揭榜时间无效。');
+    if(requested&&requested!==data.date)return hide('unavailable','所选观察档案日期无效。');
+    if(!requested&&data.date<today.date)return hide('pending','今日观察榜尚未准备；旧榜保留在历史档案，不改标今日。');
+    if(now.getTime()<release)return hide('prepared',`${data.date} 的观察榜已预备，09:00按实际客户端时钟揭榜；服务器尚未在09:00发布。`);
+    const target=context(calendars,new Date(data.date+'T09:00:00+08:00')).target;
+    if(data.status==='watch_only'&&data.data_date!==target)return hide('insufficient_data','观察榜行情未达到该日盘前完整交易日，不改标数据。');
+    data.eligible=false;data.actionable=false;data.model_validated=false;
+    for(const item of data.items){item.eligible=false;item.actionable=false;item.model_validated=false;for(const key of ['entry_low','entry_high','stop_loss','take_profit','max_position_pct'])item[key]=null;}
+    data.top_pick=data.items[0]||null;
+    if(!data.published_at&&data.status==='watch_only'){
+      data.release_mode='prepublished_client_reveal';data.revealed_at=now.toISOString();
+      data.message='此观察榜已在盘前预先准备，现按客户端北京时间09:00揭榜；published_at仍为空，不冒充服务器准点发布。';
+    }else if(data.published_at&&(!Number.isFinite(Date.parse(data.published_at))||Date.parse(data.published_at)<release||Date.parse(data.published_at)>now.getTime()+300000))return hide('unavailable','服务器实际发布时间无效，拒绝冒充已发布。');
+    if(requested&&requested<today.date)data.historical=true;
+    return data;
+  }
   async function api(path,options={}){
     if(options.method && options.method!=='GET'){
       if(path==='/api/refresh'){checked=0;files.clear();return {status:'idle',message:'正在重新读取公开快照。采集与发布由云端计划执行。'};}
@@ -249,6 +274,20 @@
       if(b.transport.mode==='offline'){plan.buy=null;plan.status='offline';plan.stale=true;plan.message=b.transport.message;(plan.sell||[]).forEach(x=>{x.stale=true;});}
       return attach(plan,b.transport);
     }
+    if(name==='daily-watchlist'){
+      const date=u.searchParams.get('date');if(date&&!validDate(date))throw new Error('无效日期');
+      const day=date||clock().date;let file=`data/watchlists/${day}.json`,b;
+      try{b=await bundle([file,'data/calendar.json'],`daily-watchlist:${day}`);}
+      catch(error){
+        if(date||error.httpStatus!==404)throw error;
+        // A missing current archive can use only the validated primary. Network
+        // failures, malformed snapshots and explicit history never masquerade as 404.
+        file='data/daily-watchlist.json';b=await bundle([file,'data/calendar.json'],'daily-watchlist');
+      }
+      const value=gateWatchlist(b.files[file],b.files['data/calendar.json'],date);
+      if(b.transport.mode==='offline')value.warnings=[...(value.warnings||[]),b.transport.message];
+      return attach(value,b.transport);
+    }
     if(name==='longterm'){
       const b=await bundle(['data/longterm.json','data/calendar.json'],'longterm'),data=b.files['data/longterm.json'],c=context(b.files['data/calendar.json']);
       if(!c.target||data.as_of!==c.target||b.transport.mode==='offline'){data.warnings=[...(data.warnings||[]),b.transport.message||'长线快照未覆盖最近完整交易日。'];(data.stocks||[]).forEach(x=>{x.eligible=false;x.stale=true;});}
@@ -259,7 +298,7 @@
     if(name==='quotes'&&b.transport.mode==='offline'){data.quotes=[];data.status=b.transport.message;}
     return attach(data,b.transport);
   }
-  const apiObject={api,download:date=>/^\d{4}-\d{2}-\d{2}$/.test(date||'')?`./data/csv/${date}.csv`:'#',context,gatePlan,gateDashboard,validManifest};
+  const apiObject={api,download:date=>/^\d{4}-\d{2}-\d{2}$/.test(date||'')?`./data/csv/${date}.csv`:'#',context,gatePlan,gateDashboard,gateWatchlist,validManifest};
   root.PagesResearch=apiObject;
   if(typeof module!=='undefined')module.exports=apiObject;
 })(globalThis);

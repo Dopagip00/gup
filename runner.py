@@ -44,7 +44,7 @@ def encode(value):
 
 
 def public_key(key):
-    return key in PUBLIC_KEYS or re.fullmatch(r'daily_plan:\d{4}-\d{2}-\d{2}', key) is not None
+    return key in PUBLIC_KEYS or re.fullmatch(r'daily_(?:plan|watchlist):\d{4}-\d{2}-\d{2}', key) is not None
 
 
 def clean_value(key, value):
@@ -284,6 +284,146 @@ def save_plans(core, repository_file: Path, artifact_dir: Path):
     return len(plans)
 
 
+def checked_watchlists(value):
+    if not isinstance(value, dict):
+        raise ValueError('观察榜档案结构错误')
+    for date, cohort in value.items():
+        if (not isinstance(date,str) or dt.date.fromisoformat(date).isoformat()!=date
+                or not isinstance(cohort,dict) or cohort.get('date')!=date
+                or cohort.get('protocol')!='daily-observation-v1' or cohort.get('status')!='watch_only'
+                or cohort.get('model_validated') is not False or cohort.get('actionable') is not False
+                or not isinstance(cohort.get('items'),list) or not 1<=len(cohort['items'])<=5):
+            raise ValueError('观察榜档案日期、协议或观察资格无效')
+        data_date=cohort.get('data_date')
+        if not isinstance(data_date,str) or dt.date.fromisoformat(data_date).isoformat()!=data_date or data_date>=date:
+            raise ValueError('观察榜信号日错误')
+        generated=dt.datetime.fromisoformat(cohort.get('generated_at',''))
+        release=dt.datetime.fromisoformat(cohort.get('release_at',''))
+        if (generated.utcoffset()!=dt.timedelta(hours=8) or release.utcoffset()!=dt.timedelta(hours=8)
+                or release.date().isoformat()!=date or release.time().replace(tzinfo=None)!=dt.time(9)):
+            raise ValueError('观察榜真实准备或揭榜时刻无效')
+        published=cohort.get('published_at')
+        if published:
+            instant=dt.datetime.fromisoformat(published)
+            if instant.utcoffset()!=dt.timedelta(hours=8) or instant<release or instant<generated:
+                raise ValueError('观察榜实际发布时刻无效')
+        seen=set()
+        for item in cohort['items']:
+            symbol=item.get('symbol') if isinstance(item,dict) else None
+            if (not isinstance(symbol,str) or not re.fullmatch(r'sh\d{6}',symbol) or symbol in seen
+                    or item.get('asof')!=data_date
+                    or any(item.get(key) is not False for key in ('model_validated','eligible','actionable'))
+                    or any(item.get(key) is not None for key in ('entry_low','entry_high','stop_loss','take_profit','max_position_pct'))):
+                raise ValueError('观察档案含无效代码、重复排名或操作性指令')
+            seen.add(symbol)
+        if canonical(cohort.get('top_pick'))!=canonical(cohort['items'][0]):
+            raise ValueError('观察档案首位与原始排名不一致')
+    return value
+
+
+def restore_watchlists(path, core):
+    if not path or not path.is_file():return 0
+    if path.stat().st_size>MAX_PLANS_BYTES:raise ValueError('观察榜档案超过大小限制')
+    archive=json.loads(path.read_text(encoding='utf-8'))
+    cohorts=checked_watchlists(archive.get('watchlists'))
+    if archive.get('schema_version')!=1 or archive.get('sha256')!=hashlib.sha256(canonical(cohorts).encode()).hexdigest():
+        raise ValueError('观察榜档案完整性校验失败')
+    for value in cohorts.values():
+        if value.get('published_at'):merge_watchlist_risks(value,value,core.now())
+    count=0
+    with core.connect() as con:
+        con.execute('BEGIN IMMEDIATE')
+        for date,value in sorted(cohorts.items()):
+            key='daily_watchlist:'+date
+            row=con.execute('SELECT value FROM kv WHERE key=?',(key,)).fetchone()
+            old=json.loads(row[0]) if row else None
+            if isinstance(old,dict) and old.get('published_at'):
+                if not value.get('published_at'):continue
+                merged=merge_watchlist_risks(old,value,core.now())
+                if canonical(merged)==canonical(old):continue
+                con.execute('UPDATE kv SET value=? WHERE key=?',(canonical(merged),key));count+=1
+                continue
+            if isinstance(old,dict) and not value.get('published_at') and old.get('generated_at','')>=value.get('generated_at',''):
+                continue
+            con.execute('INSERT OR REPLACE INTO kv VALUES(?,?)',(key,canonical(value)));count+=1
+    return count
+
+
+WATCHLIST_RISK_FIELDS={'alerts','withdrawn_symbols','warnings','current_risk_verification','review_at','rankings_immutable'}
+
+
+def merge_watchlist_risks(old, incoming, moment):
+    """Union negative evidence while retaining the exact released cohort."""
+    original=lambda value:{key:item for key,item in value.items() if key not in WATCHLIST_RISK_FIELDS}
+    if canonical(original(old))!=canonical(original(incoming)):
+        raise ValueError('已发布观察榜冲突，拒绝覆盖原始排名、分数或时刻')
+    published=dt.datetime.fromisoformat(old['published_at'])
+    symbols=[item['symbol'] for item in old['items']]
+    allowed_alert={'symbol','reason','source','withdrawn','observed_at'}
+    allowed_verification={'announcements_status','session_status','ai_status','known_risk_veto_count','evidence_cutoff'}
+    def checked(record):
+        alerts=record.get('alerts',[]);withdrawn=record.get('withdrawn_symbols',[]);warnings=record.get('warnings',[])
+        verification=record.get('current_risk_verification',{})
+        stamp=record.get('review_at');review=dt.datetime.fromisoformat(stamp) if stamp else None
+        if (published>moment or review and (review.tzinfo is None or not published<=review<=moment)
+                or not isinstance(alerts,list) or len(alerts)>1000 or not isinstance(withdrawn,list)
+                or not isinstance(warnings,list) or len(warnings)>100
+                or any(not isinstance(text,str) or len(text)>1000 for text in warnings)
+                or not isinstance(verification,dict) or set(verification)-allowed_verification
+                or record.get('rankings_immutable',True) is not True):
+            raise ValueError('观察榜后续风险记录或真实复核时刻无效')
+        if (alerts or withdrawn or verification) and review is None:
+            raise ValueError('观察榜新增风险缺少真实复核时刻')
+        cutoff=verification.get('evidence_cutoff')
+        if cutoff:
+            instant=dt.datetime.fromisoformat(cutoff)
+            if instant.tzinfo is None or not published<=instant<=review:
+                raise ValueError('观察榜风险证据来自未来或不属于本次复核')
+        for alert in alerts:
+            if (not isinstance(alert,dict) or set(alert)-allowed_alert or alert.get('symbol') not in symbols
+                    or alert.get('withdrawn') is not True
+                    or any(not isinstance(alert.get(key),str) or not alert[key].strip() or len(alert[key])>500 for key in ('source','reason'))):
+                raise ValueError('观察榜风险撤销证据无效')
+            if alert.get('observed_at'):
+                observed=dt.datetime.fromisoformat(alert['observed_at'])
+                if observed.tzinfo is None or observed>review:
+                    raise ValueError('观察榜撤销证据来自未来')
+        if any(symbol not in symbols for symbol in withdrawn):
+            raise ValueError('撤销代码不在原始观察榜')
+        return review,alerts,withdrawn,warnings
+    left=checked(old);right=checked(incoming)
+    result=json.loads(canonical(old));alerts=[];seen=set();withdrawn=set()
+    for _,rows,saved,_ in (left,right):
+        withdrawn.update(saved)
+        for alert in rows:
+            key=(alert['symbol'],alert['source'],alert['reason'])
+            if key not in seen:seen.add(key);alerts.append(dict(alert))
+            withdrawn.add(alert['symbol'])
+    result['alerts']=alerts
+    result['withdrawn_symbols']=[symbol for symbol in symbols if symbol in withdrawn]
+    result['warnings']=list(dict.fromkeys(left[3]+right[3]))
+    if left[0] or right[0]:
+        newer=incoming if right[0] and (not left[0] or right[0]>left[0]) else old
+        result['review_at']=newer['review_at']
+        if 'current_risk_verification' in newer:result['current_risk_verification']=newer['current_risk_verification']
+        result['rankings_immutable']=True
+    return result
+
+
+def save_watchlists(core, path):
+    if path.is_file():restore_watchlists(path,core)
+    with core.connect() as con:
+        rows=con.execute("SELECT key,value FROM kv WHERE key LIKE 'daily_watchlist:%' ORDER BY key").fetchall()
+    cohorts=checked_watchlists({key[len('daily_watchlist:'):]:json.loads(raw) for key,raw in rows})
+    for value in cohorts.values():
+        if value.get('published_at'):merge_watchlist_risks(value,value,core.now())
+    archive={'schema_version':1,'watchlists':cohorts,'sha256':hashlib.sha256(canonical(cohorts).encode()).hexdigest()}
+    payload=canonical(archive)
+    if len(payload.encode())>MAX_PLANS_BYTES:raise ValueError('观察榜档案超过大小限制')
+    path.parent.mkdir(parents=True,exist_ok=True);path.write_text(payload,encoding='utf-8')
+    return len(cohorts)
+
+
 def collect_news(core):
     moment = core.now()
     try:
@@ -521,6 +661,35 @@ def needs_cached_recalculation(stage, core, moment):
     return True
 
 
+def update_watchlist(core, service, moment):
+    """Prepare independent observation research, preserving its real clock."""
+    date = moment.date()
+    if moment.time().replace(tzinfo=None) >= dt.time(16):
+        for offset in range(1, 41):
+            next_date = date + dt.timedelta(days=offset)
+            if core.md.is_trading_day(next_date.isoformat()):
+                date = next_date
+                break
+        else:
+            raise RuntimeError('无法核验下一观察交易日')
+    value = importlib.import_module('daily_watchlist').publish(
+        date=date.isoformat(), service=service, now=moment)
+    if not isinstance(value, dict):
+        raise ValueError('观察榜返回格式无效')
+    result = {key: value.get(key) for key in ('date', 'data_date', 'status', 'generated_at',
+              'prepared_at', 'release_at', 'published_at', 'publication_timing', 'model_validated')}
+    result['count'] = len(value.get('items') or [])
+    top = value.get('top_pick')
+    result['top_symbol'] = top.get('symbol') if isinstance(top, dict) else None
+    return result
+
+
+def attach_watchlist(result, core, service):
+    moment = dt.datetime.fromisoformat(result.get('finished_at') or result['started_at'])
+    result['watchlist'] = update_watchlist(core, service, moment)
+    return result
+
+
 def run_stage(stage, core, service):
     moment = core.now(); date = moment.date().isoformat()
     result = {'date': date, 'stage': stage, 'started_at': moment.isoformat(), 'mode': 'manual_research'}
@@ -530,16 +699,17 @@ def run_stage(stage, core, service):
     result['target_date'] = target
     after_close = moment.time().replace(tzinfo=None) >= dt.time(16)
     if stage == 'collect' and after_close:
-        return collect_after_close(core, service, moment)
+        closed = collect_after_close(core, service, moment)
+        return attach_watchlist(closed, core, service) if closed['status'] != 'error' else closed
     if stage in ('collect','publish'):
         core.putkv('ai_review', load_ai_review(ROOT, now=moment, signal_date=target))
     if stage == 'collect':
         if moment.time().replace(tzinfo=None) < dt.time(8):
-            return dict(result, status='skipped', reason='尚未到北京时间08:00')
+            return attach_watchlist(dict(result, status='prepared', reason='08点采集前仅准备独立观察榜，不发布买入建议'), core, service)
         if moment.time().replace(tzinfo=None) >= dt.time(9, 30):
-            return dict(result, status='late_skipped', reason='已到北京时间09:30，不补造晨间采集或新买入建议')
+            return attach_watchlist(dict(result, status='late_skipped', reason='已到北京时间09:30，不补造晨间采集或新买入建议'), core, service)
         if moment.time().replace(tzinfo=None) >= dt.time(9):
-            return dict(result, status='skipped', reason='已进入09点发布窗口，跳过耗时行情重算并保留原始采集记录')
+            return attach_watchlist(dict(result, status='skipped', reason='已进入09点发布窗口，跳过耗时行情重算并保留原始采集记录'), core, service)
         cached = current_morning_research(core, moment, target)
         if cached:
             news_snapshot = core.getkv('morning_news', {})
@@ -548,14 +718,14 @@ def run_stage(stage, core, service):
                           news_status=news_snapshot.get('status') if isinstance(news_snapshot, dict) else None,
                           message='复用同日已核验的行情、模型与追高规则；原研究完成时间保留，09点发布时另核最新资讯。')
             core.putkv('github_collect', result)
-            return result
+            return attach_watchlist(result, core, service)
         news = collect_news(core)  # Sources and timestamps precede the long market download.
         market_start = core.now()
         if market_start.date() != moment.date() or market_start.time().replace(tzinfo=None) >= dt.time(9):
-            return dict(result, status='late_skipped' if market_start.date() != moment.date() or
+            return attach_watchlist(dict(result, status='late_skipped' if market_start.date() != moment.date() or
                         market_start.time().replace(tzinfo=None) >= dt.time(9, 30) else 'skipped',
                         finished_at=market_start.isoformat(), news_status=news.get('status'),
-                        reason='资讯核验后已进入发布窗口，不再启动耗时行情重算；保留实际资讯时间与原研究记录')
+                        reason='资讯核验后已进入发布窗口，不再启动耗时行情重算；保留实际资讯时间与原研究记录'), core, service)
         previous = core.getkv('last_success', {})
         if previous.get('target_date') == target:
             core.putkv('last_success', {})  # Re-run models on valid cached bars, not a forced re-download.
@@ -567,10 +737,12 @@ def run_stage(stage, core, service):
                 core.putkv('last_success', previous)
         result.update(status=service.status.get('status', 'error'), research=service.status, news_status=news.get('status'),
                       finished_at=core.now().isoformat())
+        attach_watchlist(result, core, service)
         core.putkv('github_collect', result)
     elif stage == 'publish':
         if moment.time().replace(tzinfo=None) < dt.time(9):
-            return dict(result, status='skipped', reason='尚未到北京时间09:00，禁止提前发布')
+            return attach_watchlist(dict(result, status='prepared',
+                        reason='独立观察榜已预备；09:00仅按实际客户端时钟揭榜，不冒充服务器准点发布或买入建议'), core, service)
         if after_close:
             result['close_research'] = collect_after_close(core, service, moment)
             if result['close_research']['status'] == 'error':
@@ -582,6 +754,7 @@ def run_stage(stage, core, service):
             # Same authorized 09:00 job: recheck newly published notices before
             # selection, retaining the actual new completion time and receipts.
             collect_news(core)
+        result['watchlist'] = update_watchlist(core, service, core.now())
         plan = importlib.import_module('daily_plan').publish()
         result.update(status=plan.get('status'), finished_at=core.now().isoformat(), published_at=plan.get('published_at'),
                       morning_ready=plan.get('morning_ready', False), late=plan.get('late', False),
@@ -618,6 +791,7 @@ def main(argv=None):
     parser.add_argument('--plans-file', type=Path, default=ROOT / 'research' / 'daily-plans.json')
     parser.add_argument('--restore-plans', type=Path)
     parser.add_argument('--plans-output', type=Path, default=ROOT / '.cache' / 'plans-export')
+    parser.add_argument('--watchlists-file', type=Path, default=ROOT / 'research' / 'daily-watchlists.json')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'public')
     args = parser.parse_args(argv)
     engine, state = args.engine_dir.resolve(), args.state_dir.resolve()
@@ -635,6 +809,7 @@ def main(argv=None):
             restore_seed(args.seed, core, state)
     restored_plans = restore_plans(args.plans_file, core)
     restored_plans += restore_plans(args.restore_plans, core)
+    restored_watchlists = restore_watchlists(args.watchlists_file, core)
     service = core.Service()
     failure = False
     try:
@@ -653,6 +828,8 @@ def main(argv=None):
     # The exporter must expose only public market research; no account/order API.
     result['restored_daily_plans'] = restored_plans
     result['archived_daily_plans'] = save_plans(core, args.plans_file.resolve(), args.plans_output.resolve())
+    result['restored_watchlists'] = restored_watchlists
+    result['archived_watchlists'] = save_watchlists(core,args.watchlists_file.resolve())
     core.putkv('github_run_status', result)
     save_cache(core, state, args.cache_output.resolve())
     args.output_dir.mkdir(parents=True, exist_ok=True)

@@ -50,6 +50,68 @@ function browser(options={}){
   return {api:sandbox.PagesResearch.api,calls,storage:localStorage,setFetch:fn=>{fetchImpl=fn;}};
 }
 const response=value=>({ok:true,status:200,json:async()=>structuredClone(value)});
+const observation={protocol:'daily-observation-v1',date:'2026-10-19',data_date:'2026-10-16',
+  generated_at:'2026-10-19T08:25:00+08:00',prepared_at:'2026-10-19T08:25:00+08:00',
+  release_at:'2026-10-19T09:00:00+08:00',published_at:null,publication_timing:'prepared',
+  status:'watch_only',model_validated:false,actionable:false,eligible:false,
+  items:[{symbol:'sh600001',asof:'2026-10-16',score:52,actionable:false,eligible:false,model_validated:false}],top_pick:{symbol:'sh600001'}};
+function observationFetch(url,init,fixtures){
+  if(url.pathname.endsWith('/manifest.json'))return Promise.resolve(response({...manifest,generated_at:'2026-10-19T08:25:00+08:00'}));
+  return Promise.resolve(response(url.pathname.endsWith('/daily-watchlist.json')||url.pathname.endsWith('/watchlists/2026-10-19.json')?observation:fixtures[url.pathname]));
+}
+test('prepublished observation stays hidden before nine and reveals without inventing server publication',async()=>{
+  const before=browser({now:Date.parse('2026-10-19T08:59:59+08:00'),fetch:observationFetch});
+  const hidden=await before.api('/api/daily-watchlist');
+  assert.equal(hidden.status,'prepared');assert.equal(hidden.items.length,0);assert.equal(hidden.top_pick,null);
+  const atNine=browser({now:Date.parse('2026-10-19T09:00:00+08:00'),storage:before.storage,fetch:async()=>{throw Error('offline');}});
+  const shown=await atNine.api('/api/daily-watchlist');
+  assert.equal(shown.items.length,1);assert.equal(shown.top_pick.symbol,'sh600001');assert.equal(shown.published_at,null);
+  assert.equal(shown.release_mode,'prepublished_client_reveal');assert.equal(shown.snapshot_transport.mode,'offline');
+  assert.equal(shown.actionable,false);assert.equal(shown.items[0].eligible,false);assert.equal(shown.items[0].entry_low,null);
+});
+test('observation dates never roll into tomorrow and unknown calendars reveal no candidates',()=>{
+  const old=p.gateWatchlist(observation,cal,null,new Date('2026-10-20T09:00:00+08:00'));
+  assert.equal(old.status,'pending');assert.equal(old.items.length,0);
+  assert.equal(p.gateWatchlist(observation,{},null,new Date('2026-10-19T09:00:00+08:00')).items.length,0);
+  const forged=p.gateWatchlist({...observation,published_at:'2026-10-19T08:59:00+08:00'},cal,null,new Date('2026-10-19T09:00:00+08:00'));
+  assert.equal(forged.status,'unavailable');assert.equal(forged.items.length,0);
+});
+test('after sixteen the default observation still reads the current day instead of hiding behind tomorrow preparation',async()=>{
+  const b=browser({now:Date.parse('2026-10-19T17:00:00+08:00'),fetch:async(url,init,fixtures)=>{
+    if(url.pathname.endsWith('/manifest.json'))return response({...manifest,generated_at:'2026-10-19T16:30:00+08:00',data_date:'2026-10-19'});
+    if(url.pathname.endsWith('/watchlists/2026-10-19.json'))return response(observation);
+    return response(fixtures[url.pathname]);
+  }});
+  const value=await b.api('/api/daily-watchlist');
+  assert.equal(value.date,'2026-10-19');assert.equal(value.top_pick.symbol,'sh600001');
+  assert(!b.calls.some(url=>url.includes('daily-watchlist.json')));
+});
+test('a next-session dated preparation reveals tomorrow without a new deploy, including from its own offline cache',async()=>{
+  const next={...observation,date:'2026-10-20',data_date:'2026-10-19',generated_at:'2026-10-19T16:30:00+08:00',
+    release_at:'2026-10-20T09:00:00+08:00',items:[{...observation.items[0],asof:'2026-10-19'}]};
+  const serve=async(url,init,fixtures)=>{
+    if(url.pathname.endsWith('/manifest.json'))return response({...manifest,generated_at:'2026-10-19T16:30:00+08:00',data_date:'2026-10-19'});
+    if(url.pathname.endsWith('/watchlists/2026-10-20.json'))return response(next);
+    return response(fixtures[url.pathname]);
+  };
+  const evening=browser({now:Date.parse('2026-10-19T17:00:00+08:00'),fetch:serve});
+  assert.equal((await evening.api('/api/daily-watchlist?date=2026-10-20')).items.length,0);
+  const live=browser({now:Date.parse('2026-10-20T09:00:00+08:00'),fetch:serve});
+  assert.equal((await live.api('/api/daily-watchlist')).top_pick.symbol,'sh600001');
+  const offline=browser({now:Date.parse('2026-10-20T09:00:00+08:00'),storage:evening.storage,fetch:async()=>{throw Error('offline');}});
+  const shown=await offline.api('/api/daily-watchlist');
+  assert.equal(shown.top_pick.symbol,'sh600001');assert.equal(shown.published_at,null);
+  assert.equal(shown.snapshot_transport.mode,'offline');assert.equal(shown.release_mode,'prepublished_client_reveal');
+});
+test('only a true missing dated observation falls back to primary, never a network or validation failure',async()=>{
+  const b=browser({fetch:async(url,init,fixtures)=>url.pathname.includes('/watchlists/')?{ok:false,status:404}:observationFetch(url,init,fixtures)});
+  assert.equal((await b.api('/api/daily-watchlist')).top_pick.symbol,'sh600001');
+  for(const failed of [{ok:false,status:503},response({...observation,date:'2026-10-18'})]){
+    const bad=browser({fetch:async(url,init,fixtures)=>url.pathname.includes('/watchlists/')?failed:observationFetch(url,init,fixtures)});
+    await assert.rejects(bad.api('/api/daily-watchlist'));
+    assert(!bad.calls.some(url=>url.includes('/daily-watchlist.json')));
+  }
+});
 test('an ungenerated selected day shows the actual latest day without requesting a missing file or retaining buy prices',async()=>{
   const b=browser(),data=await b.api('/api/dashboard?date=2026-10-19');
   assert.equal(data.meta.snapshot_transport.mode,'live');assert.equal(data.meta.data_date,'2026-10-16');
