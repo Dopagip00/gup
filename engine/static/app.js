@@ -111,13 +111,16 @@ function renderDashboard(data) {
   const warnings=list(m.warnings).map(String);
   if(offline)warnings.unshift(`${m.snapshot_transport.message||'正在查看离线研究缓存，新买入资格已取消。'} 快照生成：${shortTime(m.snapshot_transport.generated_at)}；点击上方重试。`);
   const missingReport=m.report_selection?.status==='unavailable';
+  const expected=m.expected_date,expectedInstant=typeof expected==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(expected)?Date.parse(expected+'T12:00:00Z'):NaN;
+  const partialCoverageOnly=Number.isFinite(expectedInstant)&&new Date(expectedInstant).toISOString().slice(0,10)===expected
+    && expected<=shanghaiDay()&&m.data_date===expected&&m.report_date===expected&&ix.date===expected&&ix.stale===false&&Number(coverage.failed)>0;
   if(state.historyDate && !missingReport) warnings.unshift(`历史行情研究：${m.report_date||state.historyDate}。历史价位仅用于复盘，不能作为当前委托依据。`);
   if(missingReport)warnings.unshift(`所选行情日期 ${m.report_selection.requested_date} 尚未生成。当前展示 ${m.report_selection.actual_date} 的真实行情研究；新买入资格已取消。`);
   if(status.status==='error' && status.error) warnings.push(status.error);
   if(running) warnings.unshift(`${status.phase || '正在下载和分析行情'}${status.total?` · 已处理 ${status.completed||0} / ${status.total} 只`:''}。已有结果会逐步显示。`);
   $('global-alert').hidden=!warnings.length;
   $('global-alert-wrap').hidden=!warnings.length;
-  text('global-alert-summary',offline?'离线缓存 · 新买入资格已取消':missingReport?`所选 ${m.report_selection.requested_date} 暂无行情，展示 ${m.report_selection.actual_date}`:status.status==='error'?'本次更新失败 · 查看原因':m.stale?'行情尚未达到目标交易日':running?'研究正在更新':Number(coverage.failed)>0?`${number(coverage.failed,0)}只行情待补齐 · 查看记录`:`数据记录 · ${warnings.length}项说明`);
+  text('global-alert-summary',offline?'离线缓存 · 新买入资格已取消':missingReport?`所选 ${m.report_selection.requested_date} 暂无行情，展示 ${m.report_selection.actual_date}`:status.status==='error'?'本次更新失败 · 查看原因':m.stale&&!partialCoverageOnly?'行情尚未达到目标交易日':running?'研究正在更新':Number(coverage.failed)>0?`${number(coverage.failed,0)}只行情待补齐 · 查看记录`:`数据记录 · ${warnings.length}项说明`);
   $('global-alert').classList.toggle('error',offline||status.status==='error');
   text('global-alert',[...new Set(warnings)].join('\n'));
   text('index-price',number(ix.raw_close ?? ix.close)); setChange('index-change',ix.change_pct,ix.date?`${ix.date}　`:'');

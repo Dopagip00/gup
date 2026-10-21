@@ -133,6 +133,30 @@ test('today observation date is prominent while the completed market date stays 
   assert.equal(a.get('recommendation-date').textContent,'2026-10-20');assert.match(a.get('recommendation-date-label').textContent,/历史观察/);
   assert.equal(data.meta.data_date,'2026-10-20');assert.equal(data.index.date,'2026-10-20');
 });
+test('a current completed snapshot labels its two missing stocks without changing stale or eligibility',()=>{
+  const a=app({now:Date.parse('2026-10-21T17:30:00+08:00')});
+  const data={meta:{report_date:'2026-10-21',data_date:'2026-10-21',expected_date:'2026-10-21',stale:true,coverage:{total:2318,ok:2316,failed:2},warnings:['2只行情未取得']},index:{date:'2026-10-21',stale:false},stocks:[]};
+  const before=structuredClone(data);a.ui.state.dashboard=data;a.ui.renderDashboard(data);
+  assert.equal(a.get('global-alert-summary').textContent,'2只行情待补齐 · 查看记录');assert.deepEqual(data,before);
+});
+test('a genuinely lagging or unknown market date keeps the overdue wording and offline takes priority',()=>{
+  const now=Date.parse('2026-10-21T17:30:00+08:00');
+  const base={meta:{report_date:'2026-10-21',data_date:'2026-10-21',expected_date:'2026-10-21',stale:true,coverage:{total:2318,ok:2316,failed:2},warnings:['待补齐']},index:{date:'2026-10-21',stale:false},stocks:[]};
+  for(const mutate of [
+    row=>{row.meta.report_date='2026-10-20';row.meta.data_date='2026-10-20';row.index.date='2026-10-20';},
+    row=>delete row.meta.expected_date,
+    row=>row.meta.report_date='2026-10-20',
+    row=>row.index.stale=true,
+    row=>{row.meta.report_date=row.meta.data_date=row.meta.expected_date=row.index.date='2026-02-30';},
+    row=>{row.meta.report_date=row.meta.data_date=row.meta.expected_date=row.index.date='2026-10-22';}
+  ]){
+    const data=structuredClone(base);mutate(data);const before=structuredClone(data),a=app({now});a.ui.state.dashboard=data;a.ui.renderDashboard(data);
+    assert.equal(a.get('global-alert-summary').textContent,'行情尚未达到目标交易日');assert.deepEqual(data,before);
+  }
+  const offline=structuredClone(base);offline.meta.snapshot_transport={mode:'offline',generated_at:'2026-10-21T17:00:00+08:00'};
+  const before=structuredClone(offline),a=app({now});a.ui.state.dashboard=offline;a.ui.renderDashboard(offline);
+  assert.equal(a.get('global-alert-summary').textContent,'离线缓存 · 新买入资格已取消');assert.deepEqual(offline,before);
+});
 test('a new close never relabels the frozen daily cohort when dashboard and watchlist arrive in either order',async()=>{
   const now=Date.parse('2026-10-21T17:30:00+08:00');
   for(const first of ['dashboard','watchlist']){
