@@ -381,6 +381,27 @@ function watchVerification(value={}) {
 function watchText(value) {
   return typeof value==='string'?value:value&&typeof value==='object'?String(value.reason||value.message||value.description||'待核验记录'):String(value??'');
 }
+function watchClientReveal(data,now=Date.now()) {
+  // The static gateway checks the official calendar. Independently verify its
+  // genuine preparation evidence here instead of trusting a reveal marker.
+  const instant=value=>typeof value==='string'&&/T.+(?:Z|[+-]\d{2}:\d{2})$/.test(value)?Date.parse(value):NaN;
+  const release=instant(data?.release_at),generated=instant(data?.generated_at),prepared=instant(data?.prepared_at),revealed=instant(data?.revealed_at);
+  const transport=data?.snapshot_transport,snapshot=instant(transport?.generated_at),items=list(data?.items);
+  return typeof window.PagesResearch?.gateWatchlist==='function'
+    && data?.release_mode==='prepublished_client_reveal'&&data.published_at===null
+    && data.status==='watch_only'&&data.publication_timing==='prepared'&&data.late===false
+    && data.model_validated===false&&data.eligible===false&&data.actionable===false
+    && /^\d{4}-\d{2}-\d{2}$/.test(data.date||'')&&/^\d{4}-\d{2}-\d{2}$/.test(data.data_date||'')
+    && data.data_date<data.date&&data.signal_date===data.data_date&&data.prepared_data_date===data.data_date
+    && release===Date.parse(`${data.date}T09:00:00+08:00`)
+    && [generated,prepared,revealed,snapshot].every(Number.isFinite)
+    && prepared<=generated&&generated<release&&release<=revealed&&revealed<=now
+    && generated<=snapshot&&snapshot<=now&&['live','offline'].includes(transport?.mode)
+    && shanghaiDay(new Date(prepared))>=data.data_date
+    && (shanghaiDay(new Date(prepared))!==data.data_date||prepared>=Date.parse(`${data.data_date}T16:00:00+08:00`))
+    && items.length>0&&items.length<=5&&items.every(item=>/^sh\d{6}$/.test(item?.symbol||'')
+      && item.asof===data.data_date&&item.model_validated===false&&item.eligible===false&&item.actionable===false);
+}
 function renderDailyWatchlist(data,options={}) {
   const body=clear($('watchlist-body')),today=shanghaiDay(),selected=state.historyDate;
   const recordDate=typeof data?.date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(data.date)?data.date:null;
@@ -393,9 +414,13 @@ function renderDailyWatchlist(data,options={}) {
   text('watch-priority-score','—');text('watch-priority-verification','公告与 AI 完整性待核验');
   text('watchlist-summary','最多 5 只，次序来自原始观察榜；相对分不是上涨概率，也不代表正式买入资格。');
   const verification=watchVerification(data?.verification);text('watchlist-verification',verification);
-  const warnings=list(data?.warnings).map(watchText).filter(Boolean);
+  const warnings=list(data?.warnings).map(watchText).filter(Boolean),clientReveal=watchClientReveal(data);
   if(data){
     text('watchlist-dates',`榜单所属：${recordDate||'未提供'} · 截至前收盘：${data.data_date||data.signal_date||'未提供'} · 实际生成：${shortTime(data.generated_at)} · 计划发布：${shortTime(data.release_at)} · 实际发布：${data.published_at?shortTime(data.published_at):'尚未发布'} · 北京时间${data.late===true||data.publication_timing==='late'?' · 迟到补发':''}`);
+    if(clientReveal){
+      text('watchlist-dates',`${$('watchlist-dates').textContent} · 客户端揭榜：${shortTime(data.revealed_at)}`);
+      warnings.unshift('本榜保留真实提前准备时间，现按客户端时钟揭榜；服务器实际发布时间仍为空，未声称服务器09:00已运行。');
+    }
     if(history)warnings.unshift('当前为所属日期的原始观察记录，仅供复盘，不作为今日名单。');
     if(!selected&&recordDate&&recordDate<today)warnings.unshift(`尚未取得 ${today} 的观察榜；当前记录属于 ${recordDate}，未替换成今天。`);
     if(data.snapshot_transport?.mode==='offline')warnings.unshift('当前为离线观察记录，请核对日期；不据此新增买入建议。');
@@ -410,7 +435,7 @@ function renderDailyWatchlist(data,options={}) {
     else if(selected&&recordDate!==selected){emptyTitle='所选日期暂无观察档案';emptyReason=`请求 ${selected}，取得记录属于 ${recordDate}；未用其他日期代替。`;}
     else if(['closed','historical_unavailable'].includes(data.status)){
       emptyTitle=data.status==='closed'?'非交易日，不生成当日观察榜':'所选日期暂无观察档案';emptyReason=warnings.join('；')||'未取得所选日期的已发布原始观察记录，不回填历史排名。';
-    }else if(recordDate>today||!Number.isFinite(release)||now<release||!Number.isFinite(published)||published<release||published>now){
+    }else if(recordDate>today||!Number.isFinite(release)||now<release||!clientReveal&&(!Number.isFinite(published)||published<release||published>now)){
       emptyTitle='观察榜尚未正式发布';emptyReason=`计划在所属交易日 09:00 发布；当前为${data.publication_timing==='prepared'?'准备记录':'待核验记录'}，未展示提前或未发布的排名。`;
     }else if(data.status==='insufficient_data'){
       emptyTitle='有效研究不足，观察榜为空';
@@ -437,7 +462,7 @@ function renderDailyWatchlist(data,options={}) {
       tr.append(node('td','reference-reason',list(item.reasons).map(watchText).slice(0,3).join('；')||'观察排序依据尚未提供。'));
       risks.append(node('span',`pill ${removed?'warn':'neutral'}`,removed?'风险撤销 · 不再优选':'仅观察 · 未通过正式买入验证'),node('p','fine-print',list(item.risk_notes).map(watchText).slice(0,4).join('；')||'公告、AI与模型完整性须另行核验，不提供未经验证的买卖价位。'));tr.append(risks);body.append(tr);
     });
-    if(rows.length)text('watchlist-summary',`${history?'历史原始':'所属交易日'}观察 ${rows.length} 只 · 榜单 ${recordDate} · 前收盘 ${data.data_date} · ${data.late===true||data.publication_timing==='late'?'迟到补发，仅观察':'以实际发布时间为准'} · 不提供未经验证的买卖价位。`);
+    if(rows.length)text('watchlist-summary',`${history?'历史原始':'所属交易日'}观察 ${rows.length} 只 · 榜单 ${recordDate} · 前收盘 ${data.data_date} · ${clientReveal?'按客户端时钟揭榜，服务器尚未发布':data.late===true||data.publication_timing==='late'?'迟到补发，仅观察':'以实际发布时间为准'} · 不提供未经验证的买卖价位。`);
   }
   $('watchlist-empty').hidden=rows.length>0;if(!rows.length)setEmpty('watchlist-empty',emptyTitle,emptyReason);
   $('watchlist-alert').hidden=!warnings.length; text('watchlist-alert',[...new Set(warnings)].join('\n'));

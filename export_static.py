@@ -4,15 +4,68 @@ import argparse
 import copy
 import datetime as dt
 import json
+import math
 from pathlib import Path
 import re
 import shutil
 import sys
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 META_KEYS = {'app_name','now','status','last_success','data_date','report_date','expected_date','stale',
              'universe','coverage','mode','schedule','next_run','warnings','daily_buy',
              'daily_plan_status','daily_plan_message','exclusion_policy','model_quality'}
+
+QUOTE_EVIDENCE_KEYS = {'quote_basis','quote_date','price_reference_date','quote_consistent',
+                       'quote_source','quote_datetime','quote_fetched_at','previous_close'}
+
+
+def _quote_instant(value):
+    if not isinstance(value, str):
+        raise ValueError('观察报价证据缺少真实带时区时间')
+    result = dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    if result.tzinfo is None:
+        raise ValueError('观察报价证据不能使用无时区时间')
+    return result.astimezone(dt.timezone(dt.timedelta(hours=8)))
+
+
+def _public_quote_evidence(raw, *, date, data_date, cutoff):
+    """Keep corroborating quote dates distinct from the original price date."""
+    if not isinstance(raw, dict) or not QUOTE_EVIDENCE_KEYS <= raw.keys():
+        raise ValueError('观察报价证据字段不完整')
+    for day in (date, data_date):
+        if not isinstance(day, str) or dt.date.fromisoformat(day).isoformat() != day:
+            raise ValueError('观察报价证据日期无效')
+    result = {key: copy.deepcopy(raw[key]) for key in QUOTE_EVIDENCE_KEYS}
+    basis = result['quote_basis']
+    same = basis == 'same_session_raw_close'
+    if basis not in ('same_session_raw_close','next_session_previous_close','auction_previous_close_unverified'):
+        raise ValueError('观察报价证据协议无效')
+    if (result['price_reference_date'] != data_date
+            or result['quote_date'] != (data_date if same else date)
+            or result['quote_consistent'] is not (basis != 'auction_previous_close_unverified')):
+        raise ValueError('观察报价日期或一致性标记不匹配')
+    stamp, fetched, checked = map(_quote_instant,
+        (result['quote_datetime'], result['quote_fetched_at'], cutoff))
+    if (stamp.date().isoformat() != result['quote_date'] or not stamp <= fetched <= checked
+            or not isinstance(data_date, str) or not isinstance(date, str) or not data_date < date):
+        raise ValueError('观察报价证据日期或实际时刻无效')
+    source = result['quote_source']
+    # Older same-session snapshots did not record a source URL. Keep that
+    # absence explicit; a next-session corroboration always needs provenance.
+    if source is not None or not same:
+        if not isinstance(source, str) or len(source) > 300:
+            raise ValueError('观察报价证据来源无效')
+        parsed = urlsplit(source)
+        if (parsed.scheme != 'https' or parsed.hostname != 'qt.gtimg.cn'
+                or parsed.username or parsed.password or parsed.port not in (None, 443)
+                or parsed.path not in ('', '/') or parsed.query or parsed.fragment):
+            raise ValueError('观察报价证据来源未经核验')
+    previous = result['previous_close']
+    if (same and previous is not None or not same and
+            (type(previous) not in (int, float) or not math.isfinite(previous) or previous <= 0)):
+        raise ValueError('观察报价昨收证据无效')
+    return result
 
 
 def public_watchlist(value):
@@ -27,9 +80,16 @@ def public_watchlist(value):
         'financial_complete','financial_data_date','financial_report_date','financial_publication_date',
         'model_validation_status','announcements_status','session_status','ai_status',
         'known_risk_veto_count','evidence_cutoff','financial_status','ai_reviewed'}
+    def verification(raw, cutoff):
+        raw = raw if isinstance(raw, dict) else {}
+        projected = {key:copy.deepcopy(v) for key,v in raw.items() if key in verification_keys}
+        if 'quote_basis' in raw:
+            projected.update(_public_quote_evidence(raw, date=value.get('date'),
+                data_date=value.get('data_date'), cutoff=cutoff))
+        return projected
     def item(raw):
         row={key:copy.deepcopy(raw[key]) for key in item_keys if key in raw}
-        row['verification']={key:copy.deepcopy(v) for key,v in raw.get('verification',{}).items() if key in verification_keys}
+        row['verification']=verification(raw.get('verification'), value.get('generated_at'))
         components=raw.get('components',{})
         row['components']={key:copy.deepcopy(components[key]) for key in ('technical','financial','atr_pct','return_5d_pct','ma20_deviation_pct') if key in components}
         row['components']['weights']={key:components.get('weights',{}).get(key) for key in ('technical','financial')}
@@ -43,9 +103,22 @@ def public_watchlist(value):
     result['alerts']=[{key:raw[key] for key in ('symbol','reason','source','withdrawn') if key in raw}
                       for raw in (value.get('alerts') or [])[:5] if isinstance(raw,dict)]
     result['withdrawn_symbols']=[s for s in (value.get('withdrawn_symbols') or [])[:5] if isinstance(s,str) and re.fullmatch(r'sh\d{6}',s)]
-    result['verification']={key:copy.deepcopy(v) for key,v in value.get('verification',{}).items() if key in verification_keys}
+    result['verification']=verification(value.get('verification'), value.get('generated_at'))
     if isinstance(value.get('current_risk_verification'),dict):
-        result['current_risk_verification']={key:copy.deepcopy(v) for key,v in value['current_risk_verification'].items() if key in verification_keys}
+        current=value['current_risk_verification']
+        result['current_risk_verification']=verification(current, value.get('review_at'))
+        if 'quotes' in current:
+            quotes=current['quotes']
+            if not isinstance(quotes,dict) or len(quotes)>5:
+                raise ValueError('原队列报价复核超出公开范围')
+            symbols={row.get('symbol') for row in result['items']}
+            quote_cutoff=current.get('evidence_cutoff') or value.get('review_at')
+            if quotes and _quote_instant(quote_cutoff)>_quote_instant(value.get('review_at')):
+                raise ValueError('原队列报价证据晚于实际复核')
+            result['current_risk_verification']['quotes']={symbol:_public_quote_evidence(evidence,
+                date=value.get('date'),data_date=value.get('data_date'),cutoff=quote_cutoff)
+                for symbol,evidence in quotes.items() if symbol in symbols and isinstance(symbol,str)
+                and re.fullmatch(r'sh(?:60[0135]|68[89])\d{3}',symbol)}
     result['warnings']=[str(text)[:500] for text in value.get('warnings',[])[:12]]
     result.update(model_validated=False,eligible=False,actionable=False)
     return result

@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import contextlib
 import datetime as dt
 import json
@@ -36,6 +37,68 @@ class PublicationTests(unittest.TestCase):
         self.assertIsNone(result['items'][0]['entry_low']);self.assertNotIn('PRIVATE',json.dumps(result))
         self.assertLessEqual(len(result['items'][0]['reasons']),5)
         self.assertTrue(source['items'][0]['actionable'])
+
+    def late_quote_observation(self):
+        evidence={'quote_basis':'next_session_previous_close','quote_date':'2026-10-21',
+            'price_reference_date':'2026-10-20','quote_consistent':True,'quote_source':'https://qt.gtimg.cn/',
+            'quote_datetime':'2026-10-21T14:00:00+08:00','quote_fetched_at':'2026-10-21T14:00:30+08:00',
+            'previous_close':10,'private':'PRIVATE_QUOTE_PAYLOAD'}
+        row={'symbol':'sh600001','name':'真实迟到观察','asof':'2026-10-20','score':48,
+            'components':{'technical':80,'financial':None,'weights':{'technical':.6,'financial':.4}},
+            'verification':dict(evidence,financial_complete=False),'reasons':['仅比较此前收盘技术规则'],
+            'risk_notes':['当日报价的昨收只佐证此前收盘，不是此前同日估值']}
+        current=dict(evidence,quote_fetched_at='2026-10-21T14:01:30+08:00')
+        return {'protocol':'daily-observation-v1','date':'2026-10-21','data_date':'2026-10-20',
+            'signal_date':'2026-10-20','generated_at':'2026-10-21T14:01:00+08:00',
+            'release_at':'2026-10-21T09:00:00+08:00','published_at':'2026-10-21T14:01:00+08:00',
+            'publication_timing':'late','late':True,'items':[row],'top_pick':row,
+            'review_at':'2026-10-21T14:02:00+08:00',
+            'current_risk_verification':{'evidence_cutoff':'2026-10-21T14:02:00+08:00',
+                'quotes':{'sh600001':current,'sh600002':{'private':'PRIVATE_FOREIGN_STOCK'}}}}
+
+    def test_late_quote_projection_preserves_original_and_current_evidence_without_relabelling_dates(self):
+        source=self.late_quote_observation();before=copy.deepcopy(source)
+        result=module.public_watchlist(source)
+        evidence=result['items'][0]['verification'];current=result['current_risk_verification']['quotes']['sh600001']
+        self.assertEqual({key:evidence[key] for key in module.QUOTE_EVIDENCE_KEYS},
+                         {key:source['items'][0]['verification'][key] for key in module.QUOTE_EVIDENCE_KEYS})
+        self.assertEqual(evidence['quote_date'],'2026-10-21')
+        self.assertEqual(evidence['price_reference_date'],'2026-10-20')
+        self.assertEqual(evidence['quote_basis'],'next_session_previous_close')
+        self.assertEqual(current['quote_fetched_at'],'2026-10-21T14:01:30+08:00')
+        self.assertEqual(set(current),module.QUOTE_EVIDENCE_KEYS)
+        self.assertEqual(set(result['current_risk_verification']['quotes']),{'sh600001'})
+        self.assertFalse(evidence['financial_complete']);self.assertIsNone(result['items'][0]['components']['financial'])
+        self.assertFalse(result['items'][0]['actionable']);self.assertIsNone(result['items'][0]['entry_low'])
+        self.assertNotIn('PRIVATE',json.dumps(result));self.assertEqual(source,before)
+
+    def test_quote_projection_rejects_forged_sources_dates_times_and_unbounded_review_maps(self):
+        for change in ({'quote_source':'https://user:secret@qt.gtimg.cn/'},
+                       {'quote_source':'https://example.com/'},
+                       {'quote_source':'https://qt.gtimg.cn/?token=PRIVATE'},
+                       {'quote_basis':'invented'}, {'price_reference_date':'2026-10-21'},
+                       {'quote_date':'2026-10-20'}, {'quote_consistent':False},
+                       {'quote_datetime':'2026-10-21T14:00:00'},
+                       {'quote_fetched_at':'2026-10-21T14:03:00+08:00'},
+                       {'previous_close':float('nan')}, {'previous_close':True}):
+            with self.subTest(change=change):
+                value=self.late_quote_observation();value['items'][0]['verification'].update(change)
+                with self.assertRaises(ValueError):module.public_watchlist(value)
+        value=self.late_quote_observation()
+        value['current_risk_verification']['quotes']['sh600001']['quote_fetched_at']='2026-10-21T14:03:00+08:00'
+        with self.assertRaises(ValueError):module.public_watchlist(value)
+        value=self.late_quote_observation();value['current_risk_verification']['quotes']={f'sh60000{i}':{} for i in range(6)}
+        with self.assertRaises(ValueError):module.public_watchlist(value)
+
+    def test_same_session_quote_projection_keeps_explicitly_unknown_legacy_source(self):
+        value=self.late_quote_observation()
+        evidence=value['items'][0]['verification']
+        evidence.update(quote_basis='same_session_raw_close',quote_date='2026-10-20',quote_source=None,
+            quote_datetime='2026-10-20T16:00:00+08:00',quote_fetched_at='2026-10-20T16:01:00+08:00',previous_close=None)
+        result=module.public_watchlist(value)
+        self.assertIsNone(result['items'][0]['verification']['quote_source'])
+        self.assertIsNone(result['items'][0]['verification']['previous_close'])
+        self.assertEqual(result['items'][0]['verification']['quote_basis'],'same_session_raw_close')
 
     def test_system_json_exposes_bounded_ai_state_without_copying_the_raw_review(self):
         with tempfile.TemporaryDirectory() as directory:

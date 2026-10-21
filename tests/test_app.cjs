@@ -14,7 +14,7 @@ function app(options={}){
   const nodes=new Map(),document={getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);},createElement:tag=>new Element(tag),createTextNode:value=>Object.assign(new Element('#text'),{textContent:value}),createDocumentFragment:()=>new Element('#fragment')};
   document.getElementById('min-score').value='0';document.getElementById('stock-sort').value='prediction';
   class FixedDate extends Date{constructor(...args){super(...(args.length?args:[options.now??Date.now()]));}static now(){return options.now??Date.now();}}
-  const sandbox={document,window:{PagesResearch:{}},location:{hostname:'dopagip00.github.io'},structuredClone,URL,requestAnimationFrame:()=>{},Intl,Date:FixedDate,setTimeout,clearTimeout,fetch:()=>{throw Error('unexpected fetch');}};
+  const sandbox={document,window:{PagesResearch:options.pages||{}},location:{hostname:'dopagip00.github.io'},structuredClone,URL,requestAnimationFrame:()=>{},Intl,Date:FixedDate,setTimeout,clearTimeout,fetch:()=>{throw Error('unexpected fetch');}};
   vm.runInNewContext(source.slice(0,source.lastIndexOf("document.querySelectorAll('[data-view]')"))+"\nglobalThis.ui={state,shortEligible,renderStocks,renderDashboard,loadDashboard,renderPrediction,renderAIReview,renderTopPick,renderDailyWatchlist,loadDailyWatchlist,disableDisconnectedResearch,openStock,setApi:fn=>api=fn,setRenderDetail:fn=>renderDetail=fn};",sandbox);
   return {ui:sandbox.ui,nodes,get:id=>document.getElementById(id)};
 }
@@ -46,6 +46,53 @@ test('prepared or future observations cannot expose their ranking before a real 
   ]){
     const a=app({now});a.ui.renderDailyWatchlist(watchlist(overrides));assert.equal(a.get('watchlist-body').children.length,0);assert.equal(a.get('watch-priority-metrics').hidden,true);assert.doesNotMatch(a.get('watch-priority-name').textContent,/观察样本/);assert.match(a.get('watchlist-empty').textContent,/尚未正式发布/);
   }
+});
+test('a genuine static gateway preparation reaches the app at nine without inventing server publication',()=>{
+  const pages=require('../pages.js'),cal={'2026':{verified:true,holidays:[]}};
+  const prepared=watchlist({generated_at:'2026-10-19T18:00:00+08:00',prepared_at:'2026-10-19T18:00:00+08:00',prepared_data_date:'2026-10-19',published_at:null,publication_timing:'prepared',late:false,eligible:false,actionable:false});
+  const original=structuredClone(prepared);
+  for(const [clock,count] of [['2026-10-20T08:59:59+08:00',0],['2026-10-20T09:00:00+08:00',1]]){
+    const now=Date.parse(clock),gated=pages.gateWatchlist(prepared,cal,null,new Date(now));
+    gated.snapshot_transport={mode:'live',generated_at:'2026-10-19T18:01:00+08:00',data_date:'2026-10-19'};
+    const a=app({now,pages});a.ui.renderDailyWatchlist(gated);
+    assert.equal(a.get('watchlist-body').children.length,count);
+    assert.equal(gated.published_at,null);assert.equal(gated.generated_at,prepared.generated_at);assert.equal(gated.prepared_at,prepared.prepared_at);
+    if(count){
+      assert.equal(a.get('watch-priority-name').textContent,'观察样本 · 600000.SH');
+      assert.match(a.get('watchlist-dates').textContent,/实际发布：尚未发布.*客户端揭榜/);
+      assert.match(a.get('watchlist-alert').textContent,/服务器实际发布时间仍为空/);
+      assert.match(a.get('watchlist-summary').textContent,/服务器尚未发布/);
+      assert.equal(gated.items[0].entry_low,null);assert.equal(a.ui.shortEligible(gated.items[0]),false);
+      gated.snapshot_transport.mode='offline';a.ui.renderDailyWatchlist(gated);assert.equal(a.get('watchlist-body').children.length,1);
+      assert.match(a.get('watchlist-alert').textContent,/离线观察记录/);
+    }
+  }
+  assert.deepEqual(prepared,original);
+  const future=pages.gateWatchlist({...prepared,date:'2026-10-21',release_at:'2026-10-21T09:00:00+08:00'},cal,null,new Date(WATCH_NOW));
+  const a=app({now:WATCH_NOW,pages});a.ui.renderDailyWatchlist(future);assert.equal(a.get('watchlist-body').children.length,0);
+  const unknown=pages.gateWatchlist(prepared,{},null,new Date(WATCH_NOW));a.ui.renderDailyWatchlist(unknown);assert.equal(a.get('watchlist-body').children.length,0);
+});
+test('a forged client reveal marker cannot bypass genuine preparation and snapshot evidence',()=>{
+  const pages=require('../pages.js'),cal={'2026':{verified:true,holidays:[]}};
+  const prepared=watchlist({generated_at:'2026-10-19T18:00:00+08:00',prepared_at:'2026-10-19T18:00:00+08:00',prepared_data_date:'2026-10-19',published_at:null,publication_timing:'prepared',late:false,eligible:false,actionable:false});
+  const shown=pages.gateWatchlist(prepared,cal,null,new Date(WATCH_NOW));
+  shown.snapshot_transport={mode:'live',generated_at:'2026-10-19T18:01:00+08:00',data_date:'2026-10-19'};
+  for(const mutate of [
+    row=>delete row.prepared_at,
+    row=>row.prepared_at='2026-10-19T18:00:00',
+    row=>row.generated_at='2026-10-20T09:01:00+08:00',
+    row=>row.release_at='2026-10-20T08:00:00+08:00',
+    row=>row.revealed_at='2026-10-20T08:59:59+08:00',
+    row=>row.prepared_data_date='2026-10-16',
+    row=>row.snapshot_transport.generated_at='2026-10-20T10:00:00+08:00',
+    row=>delete row.snapshot_transport,
+    row=>row.actionable=true,
+    row=>row.late=true
+  ]){
+    const bad=structuredClone(shown);mutate(bad);const a=app({now:WATCH_NOW,pages});a.ui.renderDailyWatchlist(bad);
+    assert.equal(a.get('watchlist-body').children.length,0);assert.equal(bad.published_at,null);
+  }
+  const unsupported=app({now:WATCH_NOW});unsupported.ui.renderDailyWatchlist(shown);assert.equal(unsupported.get('watchlist-body').children.length,0);
 });
 test('old and selected historical observations never acquire today labels or substitute another day',()=>{
   const data=watchlist({date:'2026-10-19',data_date:'2026-10-16',signal_date:'2026-10-16',generated_at:'2026-10-19T08:55:00+08:00',release_at:'2026-10-19T09:00:00+08:00',published_at:'2026-10-19T09:02:00+08:00'});
