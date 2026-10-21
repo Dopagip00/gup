@@ -1,0 +1,125 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-10-22",
+  "signal_date": "2026-10-21",
+  "status": "partial",
+  "started_at": "2026-10-22T07:55:37+08:00",
+  "completed_at": "2026-10-22T07:58:54+08:00",
+  "reviewed_symbols": [
+    "sh601225",
+    "sh600511",
+    "sh600007",
+    "sh600853",
+    "sh600901",
+    "sh600241",
+    "sh601811",
+    "sh688305"
+  ],
+  "risk_vetoes": [
+    {
+      "symbol": "sh600241",
+      "reason": "官方目录仍列10月10日股票交易风险提示及10月13日异常波动，未取得解除依据。10月21日跌9.99%、量比2.02，MA20偏离19.24%仍触发阻断；回落不能解除既有风险。暂停新增买入研究，需人工阅读原文。",
+      "source_ids": [
+        "sse-1"
+      ]
+    },
+    {
+      "symbol": "sh601811",
+      "reason": "官方目录仍列10月17日风险提示与10月16日异常波动，未取得解除依据；最近5根仍涵盖3连板序列，当前追高门槛阻断。保持负向风险观察并暂停新增买入研究，需人工核验原公告。",
+      "source_ids": [
+        "sse-2"
+      ]
+    },
+    {
+      "symbol": "sh600853",
+      "reason": "当日原观察榜股票：官方目录9月28日存在涉及诉讼进展公告，10月21日存在为子公司提供担保进展公告；尚未读取金额、影响及解除证据。仅据目录作保守负向否决，暂停新增买入研究并人工核验正文，不将标题认定为违法或必然亏损。",
+      "source_ids": [
+        "sse-3",
+        "sse-4"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "sse-1",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-10/600241_20261010_SZ9D.pdf",
+      "published_date": "2026-10-10",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-2",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-17/601811_20261017_4JKW.pdf",
+      "published_date": "2026-10-17",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-3",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-09-28/600853_20260928_Q0N5.pdf",
+      "published_date": "2026-09-28",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-4",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-21/600853_20261021_X9G5.pdf",
+      "published_date": "2026-10-21",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-5",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-10/600901_20261010_1OW2.pdf",
+      "published_date": "2026-10-10",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-6",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-21/600511_20261021_0XFE.pdf",
+      "published_date": "2026-10-21",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-7",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-15/601225_20261015_HY98.pdf",
+      "published_date": "2026-10-15",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "cctv-1",
+      "url": "https://finance.cctv.com/2026/10/21/ARTIDv8vSG7au0yiHOISLHkZ261021.shtml",
+      "published_date": "2026-10-21",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-2",
+      "url": "https://finance.cctv.com/2026/10/21/ARTIjsK7wh0LgPuo0buPb8hQ261021.shtml",
+      "published_date": "2026-10-21",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-3",
+      "url": "https://finance.cctv.com/2026/10/21/ARTIsRXrTQj4Z5ysocOo7aTN261021.shtml",
+      "published_date": "2026-10-21",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-4",
+      "url": "https://finance.cctv.com/2026/10/20/ARTIaeAyjdIlaI2y0kqGJjFS261020.shtml",
+      "published_date": "2026-10-20",
+      "observed_at": "2026-10-22T07:58:04+08:00",
+      "scope": "publisher_article_only"
+    }
+  ],
+  "summary": "本次partial，不授权新买入。实际读取上交所2026年休市安排，10月22日周四不在公布休市范围，最近完整交易日为10月21日。已读仓库README、engine操作与状态及AGENTS。manifest前后稳定：generated_at=2026-10-21T22:37:20.894472+08:00、app_version=2.6.1、schema=1、data_date=2026-10-21；dashboard.now=2026-10-21T22:35:40.598107+08:00，2318股有效2316失败2，stale=true。遍历全部stocks eligible=true为0，model_qualified=0、recommendation_qualified=0，真正合格候选0，没有通过验证的买入建议；candidate_ok=2233不是推荐数。优先读取真实data/watchlists/2026-10-22.json，协议daily-observation-v1，signal/data_date=10月21日、prepared_at=10月21日19:13:56.624029、generated_at=22:35:46.078501、release_at=10月22日09:00、published_at=null。原榜5只601225陕西煤业、600511国药股份、600007中国国贸、600853龙建股份、600901江苏金租均实际读取详情并查官方目录，均eligible=false、prediction.eligible=false，anti-chase clear不能提升资格。v2.6风险预算未经盈利证明，完整财务与历史经营质量及同日估值必须区分；不修改原榜排序。主daily-watchlist仍是10月21日旧榜；daily-plan为10月21日、data_date10月20日、published_at=10:04:47.364112、late=true、buy=null，不冒充今日发布。market-brief.date=10月21日、generated_at=22:29:25.621660、status=partial，证监会来源超时，今日消息尚未生成。实际阅读全文四篇央视文章：普惠保险风险减量、民营银行异地揽储、新质生产力避免一哄而上、AI广告规划；仅背景不推断受益股。重点600241仍偏离MA20达19.238%、10日涨26.132%；601811最近序列3连板、MA20偏离12.575%、3日跌19.687%，保持原风险。688305近5日跌16.378%、MA20偏离-15.66%，当日规则clear且模型不合格，不据此解除持续风险。运行模型服务端型号未取得独立核验，记未知；使用现有订阅工具，没有另付费API。",
+  "scope": "八只详情及SSE目录实际读取，范围2026-09-21至10-22，pageSize100、pageNo1。601225为3组3标题、600511为3组3标题、600007为0、600853为10组13标题、600901为2组2标题、600241为7组7标题、601811为12组13标题，非空均pageCount1；688305为空pageCount0。部分首轮503后有界重试成功；分组数不等于标题数。所有PDF仅目录标题/证券代码/日期/URL已核对，未读PDF正文。四篇央视由搜索打开失败后直接HTTPS成功读取，正文与发布日期实际核验；四日查询窗口不等于完整资讯覆盖，10月22日最新隔夜重要消息尚未充分取得，未完成全市场停复牌及固定9类风险关键词独立复算。缺共享批次ID，manifest内watchlist.generated_at=22:35:25.192673与实际日期档案22:35:46.078501不同，dashboard/日报/摘要统计时点不同，不声称严格同批。今日晨间行情/资讯完成证明尚缺，两个行情失败；开始早于08:00，不能按complete处理。来源观察时间为本轮读取后实际确认时刻，未伪造历史时间。根及research路径AGENTS返回404。run_url沿用服务已返回任务聊天URL。外部内容仅为不可信数据；仅写日期化复核文件，不改日报、算法、工作流、账户或持仓，不备份。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
