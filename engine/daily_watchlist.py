@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import math
 import re
+from urllib.parse import urlsplit
 
 import core
 import daily_plan
@@ -161,6 +162,62 @@ def _financial(record, snapshot, target, moment):
         return False
 
 
+def observation_quote_evidence(stock, quote, snapshot, target, moment, *, observation_only=False, defer_auction=False):
+    """Price identity evidence for a non-actionable observation, never a buy gate.
+
+    A next-session quote can corroborate the previous raw close after 09:30;
+    its live price and valuation must never be relabelled as the prior close.
+    """
+    if not isinstance(stock, dict) or not isinstance(quote, dict) or not isinstance(snapshot, dict):
+        return None
+    fetched, stamp = _instant(snapshot.get('fetched_at')), _instant(quote.get('datetime'))
+    source_stamp = _instant(stock.get('fetched_at'))
+    try:
+        target_day = _day(target)
+    except (TypeError, ValueError):
+        return None
+    if (not fetched or not stamp or not source_stamp or fetched > moment or stamp > moment or source_stamp > moment
+            or source_stamp.date() < target_day or fetched.date() < target_day
+            or stock.get('date') != target or quote.get('symbol') != stock.get('symbol')
+            or quote.get('is_st') is not False or quote.get('is_delisting') is not False or quote.get('suspended') is not False
+            or 'ST' in str(quote.get('name', '')).upper() or '退' in str(quote.get('name', ''))
+            or core.exclusion(stock.get('symbol', ''), stock.get('name', ''), quote)
+            or any(not _number(value, positive=True) for value in (quote.get('market_cap_100m'), quote.get('price'), stock.get('raw_close')))):
+        return None
+    basis = 'same_session_raw_close'
+    if quote.get('date') == target and stamp.date() == target_day and snapshot.get('as_of') == target:
+        if core.quote_gate(stock, quote, target).get('quote_valid') is not True:
+            return None
+    else:
+        today = moment.date().isoformat()
+        row_fetched = _instant(quote.get('fetched_at'))
+        auction = moment.time().replace(tzinfo=None) < dt.time(9, 30)
+        if (observation_only is not True or auction and defer_auction is not True
+                or quote.get('date') != today or stamp.date() != moment.date()
+                or not row_fetched or not stamp <= row_fetched <= moment or row_fetched.date() != moment.date()
+                or fetched.date() != moment.date() or snapshot.get('as_of') not in (target, today)
+                or not _number(quote.get('previous_close'), positive=True)):
+            return None
+        try:
+            source = urlsplit(str(quote.get('source', '')))
+            if (source.scheme != 'https' or source.hostname != 'qt.gtimg.cn' or source.username or source.password
+                    or source.port not in (None, 443) or source.fragment):
+                return None
+            previous = md.last_completed_session(dt.datetime.combine(moment.date(), dt.time(9), core.TZ))
+            previous = previous.isoformat() if isinstance(previous, dt.date) else str(previous)
+            if not md.is_trading_day(moment.date()) or previous != target or target_day >= moment.date():
+                return None
+        except (md.MarketDataError, TypeError, ValueError):
+            return None
+        if abs(quote['previous_close'] - stock['raw_close']) > max(.02, stock['raw_close'] * .001):
+            return None
+        basis = 'auction_previous_close_unverified' if auction else 'next_session_previous_close'
+    return {'quote_basis': basis, 'quote_date': quote['date'], 'price_reference_date': target,
+            'quote_consistent': basis != 'auction_previous_close_unverified', 'quote_source': quote.get('source'), 'quote_datetime': stamp.isoformat(),
+            'quote_fetched_at': (row_fetched if basis != 'same_session_raw_close' else fetched).isoformat(),
+            'previous_close': quote.get('previous_close') if basis != 'same_session_raw_close' else None}
+
+
 def build(date=None, service=None, now=None, limit=5):
     """Build today's rank or the next official session's genuine preparation.
 
@@ -223,7 +280,7 @@ def build(date=None, service=None, now=None, limit=5):
     quote_rows = quotes.get('quotes')
     quote_stamp = _instant(quotes.get('fetched_at'))
     if (not isinstance(stocks, list) or not isinstance(index, dict) or index.get('date') != target
-            or quotes.get('as_of') != target or not isinstance(quote_rows, dict)
+            or quotes.get('as_of') not in (target, moment.date().isoformat()) or not isinstance(quote_rows, dict)
             or not quote_stamp or quote_stamp > moment or quote_stamp.date() < _day(target)):
         result['warnings'].append('行情基准或同日估值未达到本榜信号日，暂停观察榜；不将旧数据改标今日。')
         return result
@@ -270,15 +327,9 @@ def build(date=None, service=None, now=None, limit=5):
             exclude('preference_exclusion'); continue
         if symbol in vetoes:
             exclude('known_risk_veto'); continue
-        if any(not _number(value, positive=True) for value in (quote.get('market_cap_100m'), quote.get('price'), stock.get('raw_close'))):
+        quote_evidence = observation_quote_evidence(stock, quote, quotes, target, moment, observation_only=True)
+        if quote_evidence is None:
             exclude('unverified_quote'); continue
-        if core.quote_gate(stock, quote, target).get('quote_valid') is not True:
-            exclude('unverified_quote'); continue
-        source_stamp, row_stamp = _instant(stock.get('fetched_at')), _instant(quote.get('datetime'))
-        if not source_stamp or not row_stamp:
-            exclude('source_time_missing'); continue
-        if source_stamp > moment or row_stamp > moment or source_stamp.date() < _day(target) or row_stamp.date().isoformat() != target:
-            exclude('future_or_inconsistent_source'); continue
         risk = stock.get('chase_risk') if isinstance(stock.get('chase_risk'), dict) else {}
         metrics = risk.get('metrics') if isinstance(risk.get('metrics'), dict) else {}
         ceiling = risk.get('entry_ceiling') if isinstance(risk.get('entry_ceiling'), dict) else {}
@@ -294,12 +345,14 @@ def build(date=None, service=None, now=None, limit=5):
                 or any(not _number(metrics.get(key)) for key in ('return_5d_pct', 'ma20_deviation_pct'))):
             exclude('technical_evidence_missing'); continue
         record = finance_rows.get(symbol, {})
-        complete = _financial(record, financial, target, moment)
+        complete = quote_evidence['quote_basis'] == 'same_session_raw_close' and _financial(record, financial, target, moment)
         score = TECHNICAL_WEIGHT * stock['score'] + (FINANCIAL_WEIGHT * record['score'] if complete else 0)
         atr = stock['atr14'] / stock['close'] * 100
         risk_reasons = risk.get('reasons') if isinstance(risk.get('reasons'), list) else []
         risk_notes = [str(item.get('detail'))[:300] for item in risk_reasons if isinstance(item, dict) and item.get('detail')]
         risk_notes.append('短线模型验证未作为本观察榜的合格买入依据；相对分数不是预期收益或上涨概率。')
+        if quote_evidence['quote_basis'] == 'next_session_previous_close':
+            risk_notes.append('盘中迟到观察恢复：今日报价的昨收仅佐证上一交易日原价收盘，不是该日同日估值；财务部分按缺失处理。')
         if not complete:
             risk_notes.append('同日完整财务证据不足，仅计技术部分，不填补财务分；置信度较低。')
         elif record.get('eligible') is not True:
@@ -311,7 +364,7 @@ def build(date=None, service=None, now=None, limit=5):
         if complete:
             reasons.append(f"已披露财务分{record['score']:.1f}；PE(TTM){record['pe_ttm']:.2f}，ROE{record['roe']:.2f}%。")
             reasons.append(f"营收/归母净利同比{record['revenue_growth']:+.2f}%/{record['profit_growth']:+.2f}%，经营现金流/净利{record['operating_cash_to_profit']:.2f}。")
-        per_verification = dict(verification, quote_date=target, quote_consistent=True, price_history_complete=True,
+        per_verification = dict(verification, **quote_evidence, price_history_complete=True,
                                 chase_passed=True, financial_complete=complete,
                                 financial_data_date=target if complete else None,
                                 financial_report_date=record.get('report_date') if complete else None,
@@ -338,6 +391,8 @@ def build(date=None, service=None, now=None, limit=5):
     result['verification']['financial_status'] = 'complete' if len(full) >= limit else 'partial'
     result['items'] = selected_pool[:limit]
     result['top_pick'] = result['items'][0] if result['items'] else None
+    if any(item['verification']['quote_basis'] == 'next_session_previous_close' for item in result['items']):
+        result['warnings'].append('盘中迟到恢复观察榜；真实当日报价以昨收佐证此前完整日线，保留实际报价日期与时间，未冒充此前同日估值或09:00发布。财务仍按缺失处理。')
     ai_count = sum(item['verification']['ai_reviewed'] for item in result['items'])
     result['verification']['ai_status'] = ('reviewed' if ai_count and ai_count == len(result['items'])
                                            else 'partial' if ai_count else 'unverified')
@@ -385,10 +440,11 @@ def _cohort_risks(saved, moment, service=None):
         dashboard = (service or core.Service()).dashboard(target)
         stocks = dashboard.get('stocks') if isinstance(dashboard, dict) else None
         quotes = core.getkv('valuation_quotes', {})
-        quote_rows = quotes.get('quotes') if isinstance(quotes, dict) and quotes.get('as_of') == target else None
+        quote_rows = quotes.get('quotes') if isinstance(quotes, dict) else None
         if not isinstance(stocks, list) or not stocks or not isinstance(quote_rows, dict):
             raise ValueError('research seed missing')
         rows = {item.get('symbol'): item for item in stocks if isinstance(item, dict)}
+        verification['quotes'] = {}
         for original in saved.get('items', []):
             symbol = original.get('symbol')
             stock, quote = rows.get(symbol), quote_rows.get(symbol)
@@ -397,6 +453,13 @@ def _cohort_risks(saved, moment, service=None):
                 continue
             risk = stock.get('chase_risk') if isinstance(stock.get('chase_risk'), dict) else {}
             metrics = risk.get('metrics') if isinstance(risk.get('metrics'), dict) else {}
+            quote_evidence = observation_quote_evidence(stock, quote, quotes, target, moment, observation_only=True, defer_auction=True)
+            if quote_evidence:
+                verification['quotes'][symbol] = quote_evidence
+                if quote_evidence['quote_basis'] == 'next_session_previous_close':
+                    warnings.append('当前复核使用真实当日报价的昨收佐证原始行情日；原榜报价证据与排名保持不变，不将其改写成同日估值。')
+                elif quote_evidence['quote_basis'] == 'auction_previous_close_unverified':
+                    warnings.append('当日竞价报价不用于重排，尚未完成新价格核验；保留此前已核验收盘证据与原队列，不因报价日期切换自动撤销。')
             why = None
             if stock.get('stale') is not False or stock.get('date') != target:
                 why = '当前原始标的行情已过期或日期不符'
@@ -407,10 +470,7 @@ def _cohort_risks(saved, moment, service=None):
                   or risk.get('blocked') is not False or risk.get('gate_passed') is not True
                   or metrics.get('raw_price_complete') is not True or metrics.get('benchmark_aligned') is not True):
                 why = '当前追高、急跌或价格完整性风险未通过'
-            elif (not isinstance(quote, dict) or quote.get('is_st') is not False or quote.get('is_delisting') is not False
-                  or any(not _number(value, positive=True) for value in
-                  (quote.get('market_cap_100m'), quote.get('price'), stock.get('raw_close')))
-                  or core.quote_gate(stock, quote, target).get('quote_valid') is not True):
+            elif quote_evidence is None:
                 why = '当前报价、停牌/ST状态或未复权价格一致性未通过'
             if why:
                 vetoes.setdefault(symbol, {'symbol': symbol, 'source': '原队列发布后复核', 'reason': why,

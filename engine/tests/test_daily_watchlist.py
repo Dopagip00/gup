@@ -393,6 +393,116 @@ class WatchlistTests(unittest.TestCase):
         watch.publish(service=self.service, now=self.moment)
         self.assertEqual(self.get('daily_plan:2026-10-20'), plan)
 
+    def intraday_quotes(self):
+        quotes = self.get('valuation_quotes')
+        quotes.update(as_of='2026-10-20', fetched_at=self.moment.isoformat())
+        for row in quotes['quotes'].values():
+            row.update(date='2026-10-20', datetime=self.moment.replace(minute=9).isoformat(),
+                       fetched_at=self.moment.isoformat(), previous_close=10, price=8.5,
+                       source='https://qt.gtimg.cn/')
+        self.put('valuation_quotes', quotes)
+        return quotes
+
+    def test_intraday_previous_close_corrobation_is_only_an_unqualified_observation(self):
+        self.intraday_quotes()
+        result = self.build()
+        self.assertEqual(result['status'], 'watch_only')
+        self.assertEqual(result['published_at'], self.moment.isoformat())
+        self.assertEqual(result['publication_timing'], 'late')
+        self.assertEqual(result['data_date'], '2026-10-19')
+        for item in result['items']:
+            evidence = item['verification']
+            self.assertEqual(evidence['quote_basis'], 'next_session_previous_close')
+            self.assertEqual(evidence['quote_date'], '2026-10-20')
+            self.assertEqual(evidence['price_reference_date'], '2026-10-19')
+            self.assertEqual(evidence['quote_source'], 'https://qt.gtimg.cn/')
+            self.assertFalse(evidence['financial_complete'])
+            self.assertIsNone(item['components']['financial'])
+            self.assertFalse(item['actionable']); self.assertFalse(item['model_validated'])
+            self.assertTrue(all(item[key] is None for key in watch.PRICE_FIELDS))
+        self.assertTrue(any('盘中迟到' in message for message in result['warnings']))
+        self.assertFalse(real_core.quote_gate(self.stocks[0], self.get('valuation_quotes')['quotes']['sh600000'], '2026-10-19')['quote_valid'])
+
+    def test_intraday_previous_close_requires_explicit_watch_only_and_after_nine_thirty(self):
+        quotes = self.intraday_quotes()
+        quote = quotes['quotes']['sh600005']
+        self.assertIsNone(watch.observation_quote_evidence(self.stocks[5], quote, quotes, '2026-10-19', self.moment))
+        early = self.moment.replace(hour=9, minute=29)
+        quotes['fetched_at'] = early.isoformat()
+        for row in quotes['quotes'].values():
+            row.update(datetime=early.isoformat(), fetched_at=early.isoformat())
+        self.put('valuation_quotes', quotes)
+        self.assertEqual(watch.build(service=self.service, now=early)['items'], [])
+        now = early.replace(minute=30)
+        self.assertIsNotNone(watch.observation_quote_evidence(self.stocks[5], quote, quotes, '2026-10-19', now, observation_only=True))
+
+    def test_intraday_previous_close_rejects_missing_future_nonadjacent_and_risky_quotes(self):
+        original = self.intraday_quotes()
+        mutations = ({'previous_close': None}, {'previous_close': True}, {'previous_close': float('nan')},
+                     {'previous_close': 10.03}, {'is_st': True}, {'is_delisting': True}, {'suspended': True},
+                     {'market_cap_100m': 5000}, {'date': '2026-10-21'},
+                     {'datetime': '2026-10-20T10:11:00+08:00'}, {'fetched_at': '2026-10-20T10:11:00+08:00'},
+                     {'datetime': '2026-10-20T10:09:00'}, {'fetched_at': None}, {'source': 'https://example.com/'})
+        for changes in mutations:
+            quotes = copy.deepcopy(original)
+            quotes['quotes']['sh600005'].update(changes)
+            self.put('valuation_quotes', quotes)
+            self.assertNotIn('sh600005', self.symbols(self.build()), changes)
+        self.put('valuation_quotes', original)
+        with patch.object(watch.md, 'last_completed_session', return_value='2026-10-16'):
+            self.assertIsNone(watch.observation_quote_evidence(self.stocks[5], original['quotes']['sh600005'], original,
+                                                             '2026-10-19', self.moment, observation_only=True))
+        with patch.object(watch.md, 'is_trading_day', return_value=False):
+            self.assertIsNone(watch.observation_quote_evidence(self.stocks[5], original['quotes']['sh600005'], original,
+                                                             '2026-10-19', self.moment, observation_only=True))
+
+    def test_intraday_current_quote_rechecks_do_not_withdraw_or_rewrite_frozen_same_day_evidence(self):
+        early = self.moment.replace(hour=8)
+        prepared = watch.publish(service=self.service, now=early)
+        original = copy.deepcopy(prepared['items'])
+        self.intraday_quotes()
+        released = watch.publish(service=self.service, now=self.moment)
+        self.assertEqual(released['items'], original)
+        self.assertEqual(released['withdrawn_symbols'], [])
+        for item in released['items']:
+            self.assertEqual(item['verification']['quote_date'], '2026-10-19')
+            current = released['current_risk_verification']['quotes'][item['symbol']]
+            self.assertEqual(current['quote_date'], '2026-10-20')
+            self.assertEqual(current['quote_basis'], 'next_session_previous_close')
+        quotes = self.get('valuation_quotes')
+        quotes['quotes'][released['top_pick']['symbol']]['suspended'] = True
+        self.put('valuation_quotes', quotes)
+        withdrawn = watch.read(service=self.service, now=self.moment + dt.timedelta(minutes=1))
+        self.assertIn(released['top_pick']['symbol'], withdrawn['withdrawn_symbols'])
+        self.assertEqual(withdrawn['items'], original)
+        self.put('valuation_quotes', {})
+        historical = watch.read('2026-10-20', service=self.service, now=self.moment + dt.timedelta(days=1))
+        self.assertEqual(historical['items'], original)
+
+    def test_auction_date_switch_does_not_withdraw_original_cohort_but_st_still_does(self):
+        prepared = watch.publish(service=self.service, now=self.moment.replace(hour=8))
+        original = copy.deepcopy(prepared['items'])
+        auction = self.moment.replace(hour=9, minute=15)
+        quotes = self.intraday_quotes()
+        quotes['fetched_at'] = auction.isoformat()
+        for quote in quotes['quotes'].values():
+            quote.update(datetime=auction.isoformat(), fetched_at=auction.isoformat())
+        self.put('valuation_quotes', quotes)
+        released = watch.publish(service=self.service, now=auction)
+        self.assertEqual(released['items'], original)
+        self.assertEqual(released['withdrawn_symbols'], [])
+        self.assertEqual(released['top_pick']['symbol'], prepared['top_pick']['symbol'])
+        evidence = released['current_risk_verification']['quotes'][prepared['top_pick']['symbol']]
+        self.assertEqual(evidence['quote_basis'], 'auction_previous_close_unverified')
+        self.assertFalse(evidence['quote_consistent'])
+        self.assertTrue(any('竞价报价不用于重排' in text for text in released['warnings']))
+        self.assertEqual(watch.build(service=self.service, now=auction)['items'], [])
+        quotes['quotes'][prepared['top_pick']['symbol']]['is_st'] = True
+        self.put('valuation_quotes', quotes)
+        withdrawn = watch.read(service=self.service, now=auction + dt.timedelta(minutes=1))
+        self.assertIn(prepared['top_pick']['symbol'], withdrawn['withdrawn_symbols'])
+        self.assertEqual(withdrawn['items'], original)
+
 
 if __name__ == '__main__':
     unittest.main()

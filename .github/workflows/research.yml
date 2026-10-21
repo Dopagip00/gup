@@ -32,7 +32,7 @@ on:
         description: 'Run collection or publish the current session report'
         required: true
         type: choice
-        options: [collect, publish, fundamentals]
+        options: [collect, publish, fundamentals, recover]
 
 permissions:
   contents: read
@@ -42,10 +42,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  official-universe:
+    # An independent Windows egress fetches the same official SSE source.
+    # A failed collector never authorizes a stale or partial membership list.
+    if: github.repository == 'Dopagip00/gup' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (vars.ENABLE_SCHEDULED_RESEARCH != 'false' || github.event_name == 'workflow_dispatch')
+    runs-on: windows-latest
+    timeout-minutes: 8
+    continue-on-error: true
+    permissions:
+      contents: read
+    outputs:
+      receipt_ready: ${{ steps.collect.outputs.receipt_ready }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Collect a fresh complete official membership receipt
+        id: collect
+        run: python universe_receipt.py collect --output-dir .cache/universe
+      - name: Pass this run's verified public source to the research runner
+        if: steps.collect.outputs.receipt_ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: huyan-current-official-universe
+          path: .cache/universe/*.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
   research:
     # Public hosting is authorized only for this repository. Explicit false pauses
     # automatic research; manual default-branch runs remain available.
     if: github.repository == 'Dopagip00/gup' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (vars.ENABLE_SCHEDULED_RESEARCH != 'false' || github.event_name == 'workflow_dispatch')
+    needs: official-universe
     runs-on: ubuntu-latest
     timeout-minutes: 50
     permissions:
@@ -76,7 +105,7 @@ jobs:
               esac ;;
             workflow_dispatch)
               case "$REQUESTED_STAGE" in
-                collect|publish|fundamentals) stage="$REQUESTED_STAGE" ;;
+                collect|publish|fundamentals|recover) stage="$REQUESTED_STAGE" ;;
                 *) echo '::error::Unrecognized manual research stage'; exit 1 ;;
               esac ;;
             push) stage=publish ;;
@@ -126,6 +155,12 @@ jobs:
           path: .cache/plans-restored
           github-token: ${{ github.token }}
           run-id: ${{ steps.cache.outputs.plans_run_id }}
+      - name: Read the independent current-run official membership receipt
+        if: needs.official-universe.outputs.receipt_ready == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: huyan-current-official-universe
+          path: .cache/universe
       - name: Collect or publish using actual Beijing time
         id: research
         env:
@@ -135,6 +170,7 @@ jobs:
           --engine-dir engine --state-dir .state
           --restore-cache .cache/restored --cache-output .cache/export
           --restore-plans .cache/plans-restored --plans-output .cache/plans-export
+          --universe-dir .cache/universe
           --seed seed/research.json.gz --output-dir public
       - name: Commit changed public advice archive with optimistic concurrency protection
         if: steps.research.outputs.site_ready == 'true' && steps.stage.outputs.stage == 'publish'
@@ -219,14 +255,14 @@ jobs:
         uses: actions/deploy-pages@v4
   fundamentals:
     # Long financial refresh must not hold the shared queue ahead of 09:11/09:19
-    # publication recovery. Only the last retry continues the financial chain;
+    # publication recovery. The last retry and closing updates continue the financial chain;
     # a manual fundamentals run executes that stage directly in research above.
-    if: needs.deploy.result == 'success' && needs.health.result == 'success' && github.event_name == 'schedule' && github.event.schedule == '19 1 * * 1-5'
+    if: always() && needs.deploy.result == 'success' && needs.health.outputs.data_ready == 'true' && github.event_name == 'schedule' && (github.event.schedule == '19 1 * * 1-5' || github.event.schedule == '20 8 * * 1-5' || github.event.schedule == '10 9 * * 1-5')
     needs: [research, deploy, health]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
-      contents: read
+      contents: write
       actions: read
     outputs:
       site_ready: ${{ steps.finance.outputs.site_ready }}
@@ -245,6 +281,25 @@ jobs:
         with:
           name: huyan-daily-plans
           path: .cache/plans-restored
+      - name: Read the latest observation archive after the research stage commit
+        id: financial-watchlists
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('node:fs');
+            const path='research/daily-watchlists.json';
+            const owner=context.repo.owner,repo=context.repo.repo,ref=context.payload.repository.default_branch;
+            try {
+              const current=(await github.rest.repos.getContent({owner,repo,path,ref})).data;
+              if(current.type!=='file'||current.encoding!=='base64'||!current.sha)throw new Error('Invalid observation archive response');
+              fs.mkdirSync('research',{recursive:true});
+              fs.writeFileSync(path,Buffer.from(current.content.replace(/\s/g,''),'base64'));
+              core.setOutput('base_sha',current.sha);
+            } catch(error) {
+              if(error.status!==404)throw error;
+              fs.rmSync(path,{force:true});
+              core.setOutput('base_sha','missing');
+            }
       - name: Update long-term fundamentals without publishing a new daily plan
         id: finance
         run: >-
@@ -253,6 +308,25 @@ jobs:
           --restore-cache .cache/restored --cache-output .cache/financial-export
           --restore-plans .cache/plans-restored --plans-output .cache/financial-plans-export
           --seed seed/research.json.gz --output-dir public
+      - name: Commit the financial stage's prepared observation archive safely
+        if: steps.finance.outputs.site_ready == 'true'
+        uses: actions/github-script@v7
+        env:
+          WATCHLISTS_BASE_SHA: ${{ steps.financial-watchlists.outputs.base_sha }}
+        with:
+          script: |
+            const fs=require('node:fs'),crypto=require('node:crypto');
+            const path='research/daily-watchlists.json',bytes=fs.readFileSync(path);
+            const sha=crypto.createHash('sha1').update(Buffer.from('blob '+bytes.length+'\0')).update(bytes).digest('hex');
+            const owner=context.repo.owner,repo=context.repo.repo,branch=context.payload.repository.default_branch;
+            let remote=null;
+            try{remote=(await github.rest.repos.getContent({owner,repo,path,ref:branch})).data;}
+            catch(error){if(error.status!==404)throw error;}
+            if(remote?.sha===sha){core.info('Financial observation archive unchanged.');return;}
+            if((remote?.sha||'missing')!==process.env.WATCHLISTS_BASE_SHA)throw new Error('Financial observation archive changed remotely; refusing replacement.');
+            await github.rest.repos.createOrUpdateFileContents({owner,repo,path,branch,
+              message:'Persist prepared observation evidence after financial research',content:bytes.toString('base64'),
+              ...(remote?{sha:remote.sha}:{})});
       - name: Persist updated public financial research
         if: always() && steps.finance.outputs.site_ready == 'true'
         uses: actions/upload-artifact@v4
@@ -339,12 +413,15 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+    outputs:
+      data_ready: ${{ steps.snapshot.outcome == 'success' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Verify the public phone snapshot and completed-session freshness
+        id: snapshot
         run: python cloud_health.py
       - name: Verify the independent daily observation ranking
         run: python watchlist_health.py

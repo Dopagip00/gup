@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent
 PUBLIC_TABLES = ('securities', 'histories', 'signals', 'runs')
 PUBLIC_KEYS = {'ai_review', 'universe_info', 'last_success', 'last_completed', 'valuation_quotes', 'longterm',
                'morning_news', 'quotes', 'github_collect', 'github_close_collect', 'github_publish', 'github_fundamentals', 'github_run_status', 'model_recalculation'}
+PUBLIC_KEYS.add('github_recover')
 PUBLIC_SCHEMA = {
     'securities': ('symbol', 'name', 'active'),
     'histories': ('symbol', 'payload', 'updated_at'),
@@ -583,7 +584,7 @@ def public_universe_receipt(core):
         result['mode'] = 'shanghai'
     if type(value.get('count')) is int and 0 < value['count'] <= 10000:
         result['count'] = value['count']
-    for key in ('fetched_at', 'last_live_attempt_at'):
+    for key in ('fetched_at', 'last_live_attempt_at', 'original_fetched_at', 'checked_at', 'collection_started_at', 'collection_finished_at'):
         if isinstance(value.get(key), str) and len(value[key]) <= 64:
             result[key] = value[key]
     for key in ('source', 'source_api'):
@@ -595,8 +596,14 @@ def public_universe_receipt(core):
         result['cache_reused'] = value['cache_reused']
     if isinstance(value.get('source_error'), str):
         result['source_error'] = value['source_error'][:300]
-    if value.get('source_provenance') in ('sse_live_verified', 'legacy_sse_engine_path'):
+    if value.get('source_provenance') in ('sse_live_verified', 'legacy_sse_engine_path', 'sse_same_day_other_runner'):
         result['source_provenance'] = value['source_provenance']
+    if value.get('collector_runner') == 'Windows':result['collector_runner']='Windows'
+    if value.get('collector_context') == 'github_actions':result['collector_context']='github_actions'
+    if isinstance(value.get('workflow_run_id'),str) and re.fullmatch(r'[0-9]{1,24}',value['workflow_run_id']):
+        result['workflow_run_id']=value['workflow_run_id']
+    if isinstance(value.get('receipt_sha256'),str) and re.fullmatch(r'[0-9a-f]{64}',value['receipt_sha256']):
+        result['receipt_sha256']=value['receipt_sha256']
     return result
 
 
@@ -687,7 +694,19 @@ def update_watchlist(core, service, moment):
 def attach_watchlist(result, core, service):
     moment = dt.datetime.fromisoformat(result.get('finished_at') or result['started_at'])
     result['watchlist'] = update_watchlist(core, service, moment)
+    if result.get('status') == 'prepared' and (result['watchlist'].get('status') != 'watch_only' or not result['watchlist'].get('count')):
+        result.update(status='pending',reason='观察榜尚未具备有效行情或必要证据，未完成预备；不把空榜记作准备成功。')
     return result
+
+
+@contextlib.contextmanager
+def official_source_context(core, directory):
+    if directory is None:
+        yield
+        return
+    from universe_receipt import use_receipt
+    with use_receipt(core, directory):
+        yield
 
 
 def run_stage(stage, core, service):
@@ -698,6 +717,21 @@ def run_stage(stage, core, service):
     target = core.md.last_completed_session(moment.replace(hour=9, minute=0, second=0, microsecond=0))
     result['target_date'] = target
     after_close = moment.time().replace(tzinfo=None) >= dt.time(16)
+    if stage == 'recover':
+        # This explicit manual stage repairs completed data at its real time.
+        # It cannot create an 08:00 receipt, rewrite advice, or fake a 09:00 pick.
+        target=core.md.last_completed_session(moment)
+        result.update(target_date=target,collection_period='manual_completed_session_recovery',morning_collection=False)
+        core.putkv('ai_review',load_ai_review(ROOT,now=moment,signal_date=target))
+        with short_term_refresh(core,target):
+            service.refresh(force=True)
+        result.update(status=service.status.get('status','error'),research=service.status,
+                      finished_at=core.now().isoformat(),
+                      message='按真实时刻恢复最近已完成交易日；不补造盘前完成或已发布买入记录。')
+        if result['status'] != 'error':
+            attach_watchlist(result,core,service)
+        core.putkv('github_recover',result)
+        return result
     if stage == 'collect' and after_close:
         closed = collect_after_close(core, service, moment)
         return attach_watchlist(closed, core, service) if closed['status'] != 'error' else closed
@@ -769,24 +803,29 @@ def run_stage(stage, core, service):
             quote_check = fast_valuations(core, latest_target)
             result.update(status='cached', finished_at=core.now().isoformat(), as_of=latest_target, target_date=latest_target,
                           quote_coverage=quote_check, message='已存在同日完整财务快照，仅核验同日报价；不重复抓取全部财报或改写买卖日报。')
+            attach_watchlist(result, core, service)
             core.putkv('github_fundamentals', result)
             return result
         fundamentals = importlib.import_module('research_refresh').refresh_fundamentals()
         coverage = fundamentals.get('coverage', {})
-        complete = coverage.get('financial_complete', 0) == coverage.get('valuation_qualified', 0)
+        qualified=coverage.get('valuation_qualified')
+        complete = (type(qualified) is int and qualified>0 and coverage.get('financial_complete')==qualified
+                    and coverage.get('not_researched',0)==0 and fundamentals.get('as_of')==latest_target)
         result.update(status='success' if complete else 'partial', finished_at=core.now().isoformat(), coverage=coverage,
                       as_of=fundamentals.get('as_of'), target_date=fundamentals.get('as_of'), message='单独更新长线研究，不改写已发布的买卖建议。')
+        attach_watchlist(result, core, service)
         core.putkv('github_fundamentals', result)
     return result
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('stage', choices=('collect', 'publish', 'fundamentals'))
+    parser.add_argument('stage', choices=('collect', 'publish', 'fundamentals', 'recover'))
     parser.add_argument('--engine-dir', type=Path, default=ROOT / 'engine')
     parser.add_argument('--state-dir', type=Path, default=ROOT / '.state')
     parser.add_argument('--restore-cache', type=Path)
     parser.add_argument('--cache-output', type=Path, default=ROOT / '.cache' / 'export')
+    parser.add_argument('--universe-dir',type=Path,help='Current-run independently collected official source receipt')
     parser.add_argument('--seed', type=Path, default=ROOT / 'seed' / 'research.json.gz')
     parser.add_argument('--plans-file', type=Path, default=ROOT / 'research' / 'daily-plans.json')
     parser.add_argument('--restore-plans', type=Path)
@@ -813,12 +852,15 @@ def main(argv=None):
     service = core.Service()
     failure = False
     try:
-        if needs_cached_recalculation(args.stage, core, core.now()):
+        if args.stage != 'recover' and needs_cached_recalculation(args.stage, core, core.now()):
             recalculation = importlib.import_module('model_refresh').refresh_cached_predictions(core)
             core.putkv('model_recalculation', recalculation)
             if recalculation.get('status') in ('error', 'conflict'):
                 raise RuntimeError('模型重算失败或源数据已变化，暂停本次研究发布')
-        result = run_stage(args.stage, core, service)
+        with official_source_context(core,args.universe_dir):
+            result = run_stage(args.stage, core, service)
+        if core.getkv('universe_info'):
+            result['universe_receipt']=public_universe_receipt(core)
         failure = result.get('status') in ('error', 'conflict')
     except Exception as exc:
         result = {'date': core.now().date().isoformat(), 'stage': args.stage, 'status': 'error', 'finished_at': core.now().isoformat(),
@@ -829,11 +871,20 @@ def main(argv=None):
     result['restored_daily_plans'] = restored_plans
     result['archived_daily_plans'] = save_plans(core, args.plans_file.resolve(), args.plans_output.resolve())
     result['restored_watchlists'] = restored_watchlists
+    core.putkv('github_run_status', result)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    importlib.import_module('export_static').export_site(args.output_dir.resolve(), service, engine_dir=engine)
+    # Export reads can create the next dated preparation or persist new risk
+    # withdrawals. Archive that final cohort, so deployment and recovery agree.
     result['archived_watchlists'] = save_watchlists(core,args.watchlists_file.resolve())
     core.putkv('github_run_status', result)
     save_cache(core, state, args.cache_output.resolve())
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    importlib.import_module('export_static').export_site(args.output_dir.resolve(), service, engine_dir=engine)
+    manifest_path=args.output_dir/'data/manifest.json'
+    if manifest_path.is_file():
+        manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+        manifest['run']=result
+        manifest_path.write_text(encode(manifest),encoding='utf-8')
+        (args.output_dir/'data/run-status.json').write_text(encode(result),encoding='utf-8')
     (args.output_dir / 'run-status.json').write_text(encode(result), encoding='utf-8')
     print(encode(result))
     if os.environ.get('GITHUB_OUTPUT'):

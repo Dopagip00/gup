@@ -361,6 +361,53 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(core.getkv('last_completed'),previous)
                 self.assertEqual(core.getkv('last_success'),previous)
 
+    def test_manual_recovery_uses_real_completed_data_without_morning_or_advice_backfill(self):
+        core=FakeCore(dt.datetime(2026,10,21,13,30,tzinfo=runner.TZ))
+        core.md.last_completed_session=lambda moment:'2026-10-20'
+        original={'published_at':'2026-10-20T10:51:00+08:00','buy':None}
+        core.putkv('daily_plan:2026-10-20',original)
+        core.putkv('github_collect',{'finished_at':'2026-10-19T08:10:00+08:00'})
+        service=Mock();service.status={'status':'partial','ok':2313,'failed':5,'total':2318}
+        with patch.object(runner,'collect_news') as news,patch.object(runner,'load_ai_review',return_value={'status':'partial'}) as ai,patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()) as short:
+            result=runner.run_stage('recover',core,service)
+        service.refresh.assert_called_once_with(force=True)
+        short.assert_called_once_with(core,'2026-10-20');news.assert_not_called()
+        self.assertEqual(ai.call_args.kwargs['now'],core.now())
+        self.assertEqual(ai.call_args.kwargs['signal_date'],'2026-10-20')
+        self.assertEqual(result['target_date'],'2026-10-20')
+        self.assertFalse(result['morning_collection']);self.assertIn('13:30',result['finished_at'])
+        self.assertEqual(core.getkv('daily_plan:2026-10-20'),original)
+        self.assertEqual(core.getkv('github_collect')['finished_at'],'2026-10-19T08:10:00+08:00')
+        self.assertNotIn('github_publish',core.values);self.assertTrue(runner.public_key('github_recover'))
+
+    def test_empty_preparation_is_pending_instead_of_a_false_prepared_receipt(self):
+        core=FakeCore(dt.datetime(2026,10,21,8,25,tzinfo=runner.TZ))
+        with patch.object(runner,'update_watchlist',return_value={'status':'insufficient_data','count':0}):
+            result=runner.run_stage('publish',core,Mock())
+        self.assertEqual(result['status'],'pending')
+        self.assertIn('未完成预备',result['reason'])
+
+    def test_export_created_cohort_is_in_the_final_archive_and_cache(self):
+        engine=self.root/'engine';engine.mkdir();(engine/'core.py').touch()
+        core=self.closing_core();core.init_db=Mock();core.Service=Mock(return_value=Mock())
+        output=self.root/'public';captured={}
+        cohort={'date':'2026-10-20','items':[{'symbol':'sh600001','score':70}],'published_at':None}
+        def export(*args,**kwargs):
+            core.putkv('daily_watchlist:2026-10-20',copy.deepcopy(cohort))
+            (output/'data').mkdir(parents=True)
+            (output/'data/manifest.json').write_text('{"generated_at":"2026-10-19T17:00:00+08:00"}')
+            (output/'index.html').touch()
+        def archive(*args):
+            captured['archive']=copy.deepcopy(core.values);return 1
+        def cache(*args):captured['cache']=copy.deepcopy(core.values)
+        modules={'core':core,'export_static':types.SimpleNamespace(export_site=export)}
+        with patch.object(runner,'restore_cache',return_value=True),patch.object(runner,'restore_plans',return_value=0),patch.object(runner,'save_plans',return_value=0),patch.object(runner,'save_cache',side_effect=cache),patch.object(runner,'needs_cached_recalculation',return_value=False),patch.object(runner,'run_stage',return_value={'status':'success','stage':'fundamentals'}),patch.object(runner.importlib,'import_module',side_effect=lambda name:modules[name]),patch.object(runner,'restore_watchlists',return_value=0),patch.object(runner,'save_watchlists',side_effect=archive),patch.dict(os.environ,{'GITHUB_OUTPUT':''}):
+            self.assertEqual(runner.main(['fundamentals','--engine-dir',str(engine),'--state-dir',str(self.root/'state'),'--output-dir',str(output)]),0)
+        for name in ('archive','cache'):
+            self.assertEqual(captured[name]['daily_watchlist:2026-10-20'],cohort)
+        manifest=json.loads((output/'data/manifest.json').read_text())
+        self.assertEqual(manifest['run']['archived_watchlists'],1)
+        self.assertEqual(json.loads((output/'data/run-status.json').read_text())['archived_watchlists'],1)
     def test_news_crossing_nine_does_not_start_a_long_market_refresh(self):
         for finished,expected in ((dt.datetime(2026,10,19,9,tzinfo=runner.TZ),'skipped'),
                                  (dt.datetime(2026,10,19,9,30,tzinfo=runner.TZ),'late_skipped')):
@@ -476,6 +523,7 @@ class RunnerTests(unittest.TestCase):
             result=runner.run_stage('fundamentals',core,Mock())
         self.assertEqual(result['status'],'cached');valuations.assert_called_once();imports.assert_not_called()
         self.assertNotIn('github_publish',core.values)
+        self.assertEqual(result['watchlist']['count'],5)
 
     def test_new_financial_date_runs_full_research_without_daily_publication(self):
         core=FakeCore();core.putkv('longterm',{'as_of':'2026-10-15','coverage':{'valuation_qualified':836,'financial_complete':836}})
@@ -484,6 +532,16 @@ class RunnerTests(unittest.TestCase):
             result=runner.run_stage('fundamentals',core,Mock())
         self.assertEqual(result['status'],'partial');refresh.assert_called_once()
         imports.assert_called_once_with('research_refresh');self.assertNotIn('github_publish',core.values)
+        self.assertEqual(result['watchlist']['count'],5)
+
+    def test_zero_or_unfinished_financial_coverage_never_counts_as_complete(self):
+        for coverage in ({'valuation_qualified':0,'financial_complete':0},
+                         {'valuation_qualified':10,'financial_complete':10,'not_researched':2}):
+            core=FakeCore()
+            refresh=Mock(return_value={'as_of':'2026-10-16','coverage':coverage})
+            with patch.object(runner.importlib,'import_module',return_value=types.SimpleNamespace(refresh_fundamentals=refresh)):
+                result=runner.run_stage('fundamentals',core,Mock())
+            self.assertEqual(result['status'],'partial');self.assertIn('watchlist',result)
 
     def advice(self,date='2026-10-16',symbol='sh600298',sell_date='2026-10-19'):
         return {'date':date,'status':'published','published_at':date+'T09:00:00+08:00',

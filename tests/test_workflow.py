@@ -16,7 +16,7 @@ class WorkflowBranchTests(unittest.TestCase):
     def evaluate(self, condition, *, event='schedule', ref='refs/heads/main', research_flag='',
                  deploy_flag='', repository='Dopagip00/gup', default_branch='main',
                  site_ready='true', stage='', schedule='0 1 * * 1-5', deploy_result='success',
-                 resolved_stage='publish',health_result='success'):
+                 resolved_stage='publish',health_result='success',data_ready='true'):
         expression=condition.replace('&&',' and ').replace('||',' or ')
         context={
             'vars':SimpleNamespace(ENABLE_SCHEDULED_RESEARCH=research_flag, ENABLE_PAGES_DEPLOY=deploy_flag),
@@ -25,10 +25,11 @@ class WorkflowBranchTests(unittest.TestCase):
                     inputs=SimpleNamespace(stage=stage), schedule=schedule)),
             'needs':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
                 fundamentals=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
-                deploy=SimpleNamespace(result=deploy_result),health=SimpleNamespace(result=health_result)),
+                deploy=SimpleNamespace(result=deploy_result),health=SimpleNamespace(result=health_result,outputs=SimpleNamespace(data_ready=data_ready))),
             'steps':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
                 stage=SimpleNamespace(outputs=SimpleNamespace(stage=resolved_stage))),
             'format':lambda template,*values:template.format(*values),
+            'always':lambda:True,
         }
         return eval(expression,{'__builtins__':{}},context)
 
@@ -42,6 +43,18 @@ class WorkflowBranchTests(unittest.TestCase):
                 self.assertTrue(self.enabled(event=event))
                 self.assertTrue(self.enabled('deploy',event=event))
                 self.assertTrue(self.enabled('deploy-longterm',event=event))
+
+    def test_independent_official_source_is_current_run_only_and_keeps_authorization(self):
+        source=self.job('official-universe');research=self.job('research')
+        self.assertIn('runs-on: windows-latest',source)
+        self.assertIn('python universe_receipt.py collect --output-dir .cache/universe',source)
+        self.assertIn("if: steps.collect.outputs.receipt_ready == 'true'",source)
+        self.assertIn('needs: official-universe',research)
+        self.assertIn('--universe-dir .cache/universe',research)
+        for event in ('schedule','push','workflow_dispatch'):
+            self.assertTrue(self.enabled('official-universe',event=event))
+            self.assertFalse(self.enabled('official-universe',event=event,repository='other/gup'))
+            self.assertFalse(self.enabled('official-universe',event=event,ref='refs/heads/test'))
 
     def test_explicit_false_pauses_automatic_research_but_allows_manual_recovery(self):
         for event in ('schedule','push'):
@@ -113,7 +126,7 @@ class WorkflowBranchTests(unittest.TestCase):
         self.assertEqual([schedule for schedule in configured if mapping[schedule]=='publish'],
             ['50 23 * * 0-4','3 1 * * 1-5','11 1 * * 1-5','19 1 * * 1-5'])
         self.assertIn("*) echo '::error::Unrecognized research schedule'; exit 1",resolver)
-        self.assertIn('collect|publish|fundamentals) stage="$REQUESTED_STAGE"',resolver)
+        self.assertIn('collect|publish|fundamentals|recover) stage="$REQUESTED_STAGE"',resolver)
         self.assertIn('push) stage=publish',resolver)
         self.assertIn("*) echo '::error::Unrecognized research event'; exit 1",resolver)
 
@@ -145,6 +158,9 @@ class WorkflowBranchTests(unittest.TestCase):
         self.assertFalse(self.enabled('fundamentals',event='push',schedule=''))
         self.assertFalse(self.enabled('fundamentals',event='push',schedule='',deploy_result='failure'))
         self.assertFalse(self.enabled('fundamentals',schedule='19 1 * * 1-5',deploy_result='failure'))
+        for schedule in ('19 1 * * 1-5','20 8 * * 1-5','10 9 * * 1-5'):
+            self.assertTrue(self.enabled('fundamentals',schedule=schedule,health_result='failure',data_ready='true'))
+            self.assertFalse(self.enabled('fundamentals',schedule=schedule,data_ready='false'))
 
     def test_cache_storage_is_bounded_and_public_failure_is_visible(self):
         self.assertIn('concurrency:\n  group: huyan-research-state\n  cancel-in-progress: false',WORKFLOW)
@@ -170,7 +186,19 @@ class WorkflowBranchTests(unittest.TestCase):
         self.assertIn('run: python watchlist_health.py',health)
         diagnostic=health.split('      - name: Diagnose formal morning qualification',1)[1]
         self.assertIn('continue-on-error: true',diagnostic)
-        self.assertFalse(self.enabled('fundamentals',schedule='19 1 * * 1-5',health_result='failure'))
+        self.assertFalse(self.enabled('fundamentals',schedule='19 1 * * 1-5',health_result='failure',data_ready='false'))
+        self.assertIn("data_ready: ${{ steps.snapshot.outcome == 'success' && 'true' || 'false' }}",health)
+
+    def test_financial_preparation_uses_the_latest_archive_and_a_lease(self):
+        finance=self.job('fundamentals')
+        read=finance.index('Read the latest observation archive after the research stage commit')
+        run=finance.index('Update long-term fundamentals without publishing a new daily plan')
+        commit=finance.index("Commit the financial stage's prepared observation archive safely")
+        self.assertLess(read,run);self.assertLess(run,commit)
+        self.assertIn("core.setOutput('base_sha',current.sha)",finance)
+        self.assertIn("WATCHLISTS_BASE_SHA: ${{ steps.financial-watchlists.outputs.base_sha }}",finance)
+        self.assertIn("Financial observation archive changed remotely; refusing replacement.",finance)
+        self.assertIn('contents: write',finance)
 
     def test_hidden_research_artifacts_upload_only_the_explicit_public_whitelist(self):
         expected={
@@ -178,6 +206,7 @@ class WorkflowBranchTests(unittest.TestCase):
             'huyan-daily-plans':['.cache/plans-export/daily-plans.json'],
             'huyan-research-cache-financial':['.cache/financial-export/research.sqlite3','.cache/financial-export/cache-meta.json'],
             'huyan-daily-plans-financial':['.cache/financial-plans-export/daily-plans.json'],
+            'huyan-current-official-universe':['.cache/universe/*.json'],
         }
         uploads={}
         for step in re.findall(r'(?ms)^      - name: [^\n]+\n(.*?)(?=^      - name:|^  [a-z]|\Z)',WORKFLOW):
