@@ -8,12 +8,14 @@ import gzip
 import hashlib
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 import re
 import sqlite3
 import sys
 import tempfile
+from urllib.parse import urlsplit
 from ai_review import load_review as load_ai_review
 
 TZ = dt.timezone(dt.timedelta(hours=8))
@@ -361,7 +363,7 @@ def merge_watchlist_risks(old, incoming, moment):
     published=dt.datetime.fromisoformat(old['published_at'])
     symbols=[item['symbol'] for item in old['items']]
     allowed_alert={'symbol','reason','source','withdrawn','observed_at'}
-    allowed_verification={'announcements_status','session_status','ai_status','known_risk_veto_count','evidence_cutoff'}
+    allowed_verification={'announcements_status','session_status','ai_status','known_risk_veto_count','evidence_cutoff','quotes'}
     def checked(record):
         alerts=record.get('alerts',[]);withdrawn=record.get('withdrawn_symbols',[]);warnings=record.get('warnings',[])
         verification=record.get('current_risk_verification',{})
@@ -380,6 +382,33 @@ def merge_watchlist_risks(old, incoming, moment):
             instant=dt.datetime.fromisoformat(cutoff)
             if instant.tzinfo is None or not published<=instant<=review:
                 raise ValueError('观察榜风险证据来自未来或不属于本次复核')
+        # The engine records current quote corroboration separately from the
+        # immutable item evidence. Preserve this public contract across runs.
+        quote_fields={'quote_basis','quote_date','price_reference_date','quote_consistent','quote_source',
+                      'quote_datetime','quote_fetched_at','previous_close'}
+        quotes=verification.get('quotes',{})
+        if not isinstance(quotes,dict) or any(symbol not in symbols for symbol in quotes):
+            raise ValueError('观察榜报价复核不属于原始队列')
+        for evidence in quotes.values():
+            if not isinstance(evidence,dict) or set(evidence)!=quote_fields or review is None:
+                raise ValueError('观察榜报价复核格式无效')
+            stamp=dt.datetime.fromisoformat(evidence['quote_datetime'])
+            fetched=dt.datetime.fromisoformat(evidence['quote_fetched_at'])
+            source=urlsplit(evidence['quote_source'])
+            basis=evidence['quote_basis']
+            same=basis=='same_session_raw_close'
+            previous=evidence['previous_close']
+            if (basis not in ('same_session_raw_close','next_session_previous_close','auction_previous_close_unverified')
+                    or evidence['price_reference_date']!=old['data_date']
+                    or evidence['quote_date']!=(old['data_date'] if same else old['date'])
+                    or evidence['quote_consistent'] is not (basis!='auction_previous_close_unverified')
+                    or stamp.tzinfo is None or fetched.tzinfo is None or not stamp<=fetched<=review
+                    or stamp.date().isoformat()!=evidence['quote_date'] or fetched.date()<stamp.date()
+                    or source.scheme!='https' or source.hostname!='qt.gtimg.cn' or source.username or source.password
+                    or source.port not in (None,443) or source.fragment
+                    or same and previous is not None
+                    or not same and (type(previous) not in (int,float) or not math.isfinite(previous) or previous<=0)):
+                raise ValueError('观察榜报价复核来源、日期或真实时刻无效')
         for alert in alerts:
             if (not isinstance(alert,dict) or set(alert)-allowed_alert or alert.get('symbol') not in symbols
                     or alert.get('withdrawn') is not True
@@ -658,6 +687,20 @@ def collect_after_close(core, service, moment):
 def needs_cached_recalculation(stage, core, moment):
     if stage == 'collect':
         return False
+    if (stage == 'publish' and dt.time(8) <= moment.time().replace(tzinfo=None) < dt.time(9)
+            and core.md.is_trading_day(moment.date().isoformat())):
+        target = core.md.last_completed_session(moment.replace(hour=9, minute=0, second=0, microsecond=0))
+        try:
+            with core.connect() as con:
+                exists = con.execute('SELECT 1 FROM signals WHERE report_date=? LIMIT 1', (target,)).fetchone()
+        except (sqlite3.Error, TypeError):
+            # An unreadable cache is not proof that its target report is absent.
+            pass
+        else:
+            if exists is None:
+                # The publish-stage rescue will recheck the actual collection
+                # clock and compute the current model from newly collected bars.
+                return False
     if (stage == 'publish' and moment.time().replace(tzinfo=None) >= dt.time(16)
             and core.md.is_trading_day(moment.date().isoformat())):
         target = core.md.last_completed_session(moment)
@@ -775,6 +818,19 @@ def run_stage(stage, core, service):
         core.putkv('github_collect', result)
     elif stage == 'publish':
         if moment.time().replace(tzinfo=None) < dt.time(9):
+            # Timely subscription-AI pushes can rescue a failed closing run
+            # inside the already authorized 08:00 collection window. A delayed
+            # cron must not be the only way to obtain the previous close.
+            if moment.time().replace(tzinfo=None) >= dt.time(8):
+                try:
+                    reports=service.reports()
+                    missing=isinstance(reports,list) and not any(isinstance(row,dict) and row.get('date')==target for row in reports)
+                except Exception:
+                    missing=False
+                if missing:
+                    recovered=run_stage('collect',core,service)
+                    recovered.update(requested_stage='publish',trigger='preopen_missing_completed_report')
+                    return recovered
             return attach_watchlist(dict(result, status='prepared',
                         reason='独立观察榜已预备；09:00仅按实际客户端时钟揭榜，不冒充服务器准点发布或买入建议'), core, service)
         if after_close:

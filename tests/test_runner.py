@@ -327,6 +327,49 @@ class RunnerTests(unittest.TestCase):
         core.now=lambda:dt.datetime(2026,10,19,9,7,tzinfo=runner.TZ)
         self.assertTrue(runner.needs_cached_recalculation('publish',core,core.now()))
 
+    def test_preopen_missing_report_skips_old_model_recalculation_only_in_collection_window(self):
+        core=FakeCore(dt.datetime(2026,10,21,8,25,tzinfo=runner.TZ))
+        self.current_cache(core)  # Real old report exists, but the target report does not.
+        core.md.last_completed_session=lambda moment:'2026-10-20'
+        self.assertFalse(runner.needs_cached_recalculation('publish',core,core.now()))
+        for hour,minute in ((7,50),(9,0),(9,30)):
+            moment=core.now().replace(hour=hour,minute=minute)
+            self.assertTrue(runner.needs_cached_recalculation('publish',core,moment))
+        self.assertTrue(runner.needs_cached_recalculation('fundamentals',core,core.now()))
+        core.md.is_trading_day=lambda date:False
+        self.assertTrue(runner.needs_cached_recalculation('publish',core,core.now()))
+
+    def test_preopen_existing_or_unreadable_report_does_not_skip_recalculation(self):
+        core=FakeCore(dt.datetime(2026,10,19,8,25,tzinfo=runner.TZ))
+        self.current_cache(core)
+        self.assertTrue(runner.needs_cached_recalculation('publish',core,core.now()))
+        core.connect=Mock(side_effect=sqlite3.OperationalError('cache unavailable'))
+        self.assertTrue(runner.needs_cached_recalculation('publish',core,core.now()))
+
+    def test_main_preopen_missing_report_collects_without_recalculating_old_models(self):
+        engine=self.root/'engine';engine.mkdir();(engine/'core.py').touch()
+        core=FakeCore(dt.datetime(2026,10,21,8,25,tzinfo=runner.TZ));self.current_cache(core)
+        core.md.last_completed_session=lambda moment:'2026-10-20'
+        core.init_db=Mock();service=Mock();service.reports.return_value=[]
+        service.status={'status':'partial','ok':99,'failed':1,'total':100}
+        core.Service=Mock(return_value=service)
+        original={'date':'2026-10-20','status':'published','published_at':'2026-10-20T10:51:00+08:00','buy':None}
+        core.putkv('daily_plan:2026-10-20',copy.deepcopy(original))
+        output=self.root/'public';imported=[]
+        def module(name):
+            imported.append(name)
+            return {'core':core,'export_static':types.SimpleNamespace(export_site=Mock())}[name]
+        with patch.object(runner,'restore_cache',return_value=True),patch.object(runner,'restore_plans',return_value=0),patch.object(runner,'save_plans',return_value=0),patch.object(runner,'save_cache'),patch.object(runner.importlib,'import_module',side_effect=module),patch.object(runner,'restore_watchlists',return_value=0),patch.object(runner,'save_watchlists',return_value=0),patch.object(runner,'collect_news',return_value={'status':'verified'}) as news,patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()),patch.object(runner,'load_ai_review',return_value={'status':'partial'}),patch.dict(os.environ,{'GITHUB_OUTPUT':''}):
+            self.assertEqual(runner.main(['publish','--engine-dir',str(engine),'--state-dir',str(self.root/'state'),'--output-dir',str(output)]),0)
+        self.assertNotIn('model_refresh',imported)
+        service.refresh.assert_called_once_with(force=False);news.assert_called_once()
+        result=json.loads((output/'run-status.json').read_text(encoding='utf-8'))
+        self.assertEqual(result['stage'],'collect')
+        self.assertEqual(result['trigger'],'preopen_missing_completed_report')
+        self.assertEqual(result['target_date'],'2026-10-20')
+        self.assertEqual(core.getkv('daily_plan:2026-10-20'),original)
+        self.assertNotIn('github_publish',core.values)
+
     def test_explicit_collection_failure_makes_main_exit_nonzero_with_an_honest_status(self):
         engine=self.root/'engine';engine.mkdir();(engine/'core.py').touch()
         core=self.closing_core();core.init_db=Mock();core.Service=Mock(return_value=Mock())
@@ -386,6 +429,26 @@ class RunnerTests(unittest.TestCase):
             result=runner.run_stage('publish',core,Mock())
         self.assertEqual(result['status'],'pending')
         self.assertIn('未完成预备',result['reason'])
+
+    def test_timely_ai_push_can_collect_a_missing_completed_session_before_nine(self):
+        core=FakeCore(dt.datetime(2026,10,21,8,25,tzinfo=runner.TZ));service=Mock()
+        service.reports.return_value=[]
+        service.status={'status':'partial','ok':99,'failed':1,'total':100}
+        with patch.object(runner,'collect_news',return_value={'status':'verified'}) as news,patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()):
+            result=runner.run_stage('publish',core,service)
+        service.refresh.assert_called_once_with(force=False);news.assert_called_once()
+        self.assertEqual(result['stage'],'collect');self.assertEqual(result['requested_stage'],'publish')
+        self.assertEqual(result['trigger'],'preopen_missing_completed_report')
+        self.assertEqual(result['started_at'],core.now().isoformat())
+        self.assertNotIn('github_publish',core.values)
+
+    def test_no_missing_report_collection_is_started_before_eight_or_from_nine(self):
+        for hour,minute in ((7,50),(9,0),(9,30)):
+            core=FakeCore(dt.datetime(2026,10,21,hour,minute,tzinfo=runner.TZ));service=Mock()
+            service.reports.return_value=[]
+            with patch.object(runner,'collect_news'),patch.object(runner.importlib,'import_module',return_value=types.SimpleNamespace(publish=lambda:{'status':'pending'})):
+                runner.run_stage('publish',core,service)
+            service.refresh.assert_not_called()
 
     def test_export_created_cohort_is_in_the_final_archive_and_cache(self):
         engine=self.root/'engine';engine.mkdir();(engine/'core.py').touch()
@@ -638,6 +701,30 @@ class RunnerTests(unittest.TestCase):
                        lambda value:value['alerts'][0].update(observed_at='2026-10-19T11:00:00+08:00')):
             incoming=copy.deepcopy(fresh);mutate(incoming)
             with self.assertRaises(ValueError):runner.merge_watchlist_risks(base,incoming,moment)
+
+    def test_real_current_quote_evidence_survives_archive_without_rewriting_the_cohort(self):
+        database=self.root/'quote-watch.sqlite3';make_db(database)
+        core=FakeCore(dt.datetime(2026,10,19,14,tzinfo=runner.TZ),database=database)
+        base=dict(self.watchlist(),published_at='2026-10-19T13:40:00+08:00')
+        evidence={'quote_basis':'next_session_previous_close','quote_date':'2026-10-19',
+            'price_reference_date':'2026-10-16','quote_consistent':True,'quote_source':'https://qt.gtimg.cn/',
+            'quote_datetime':'2026-10-19T13:45:00+08:00','quote_fetched_at':'2026-10-19T13:45:01+08:00',
+            'previous_close':10.02}
+        fresh=dict(base,review_at='2026-10-19T13:46:00+08:00',rankings_immutable=True,
+            current_risk_verification={'evidence_cutoff':'2026-10-19T13:46:00+08:00','quotes':{'sh600001':evidence}})
+        key='daily_watchlist:'+base['date'];path=self.root/'quote-archive.json'
+        with core.connect() as con:con.execute('INSERT INTO kv VALUES(?,?)',(key,runner.encode(fresh)))
+        self.assertEqual(runner.save_watchlists(core,path),1)
+        with core.connect() as con:con.execute('UPDATE kv SET value=?',(runner.encode(base),))
+        self.assertEqual(runner.restore_watchlists(path,core),1)
+        with core.connect() as con:saved=json.loads(con.execute('SELECT value FROM kv').fetchone()[0])
+        self.assertEqual(saved['items'],base['items']);self.assertEqual(saved['published_at'],base['published_at'])
+        self.assertEqual(saved['current_risk_verification']['quotes']['sh600001'],evidence)
+        for mutate in (lambda q:q.update(quote_fetched_at='2026-10-19T15:00:00+08:00'),
+                       lambda q:q.update(quote_date='2026-10-20'),lambda q:q.update(previous_close=-1),
+                       lambda q:q.update(quote_source='https://example.com/'),lambda q:q.update(actionable=True)):
+            incoming=copy.deepcopy(fresh);mutate(incoming['current_risk_verification']['quotes']['sh600001'])
+            with self.assertRaises(ValueError):runner.merge_watchlist_risks(base,incoming,core.now())
 
     def test_friday_archive_survives_monday_seed_fallback_and_produces_original_d2_sell(self):
         database=self.root/'monday.sqlite3';make_db(database);core=FakeCore(database=database)
