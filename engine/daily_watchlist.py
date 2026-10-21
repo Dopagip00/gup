@@ -544,7 +544,7 @@ def _cohort_risks(saved, moment, service=None):
     """Review the original symbols only; a changed score never changes ranks."""
     target = saved.get('data_date')
     vetoes, verification = _known_risks(moment, target)
-    warnings = []
+    warnings, verified_historical_stale = [], set()
     try:
         dashboard = (service or core.Service()).dashboard(target)
         stocks = dashboard.get('stocks') if isinstance(dashboard, dict) else None
@@ -552,6 +552,18 @@ def _cohort_risks(saved, moment, service=None):
         quote_rows = quotes.get('quotes') if isinstance(quotes, dict) else None
         if not isinstance(stocks, list) or not stocks or not isinstance(quote_rows, dict):
             raise ValueError('research seed missing')
+        # Service.dashboard gates historical rows against the latest completed
+        # session for executable advice. That presentation-level stale marker
+        # is not new negative evidence about the original cohort's dated bars.
+        # Accept it only when the complete dashboard identity confirms this
+        # exact historical report and its newer, real completed-session clock.
+        meta = dashboard.get('meta') if isinstance(dashboard.get('meta'), dict) else {}
+        index = dashboard.get('index') if isinstance(dashboard.get('index'), dict) else {}
+        latest = md.last_completed_session(moment)
+        latest = latest.isoformat() if isinstance(latest, dt.date) else str(latest)
+        historical_view = (isinstance(target, str) and target < latest
+            and meta.get('report_date') == target and meta.get('data_date') == target
+            and meta.get('expected_date') == latest and index.get('date') == target)
         rows = {item.get('symbol'): item for item in stocks if isinstance(item, dict)}
         verification['quotes'] = {}
         for original in saved.get('items', []):
@@ -559,6 +571,9 @@ def _cohort_risks(saved, moment, service=None):
             stock, quote = rows.get(symbol), quote_rows.get(symbol)
             if stock is None:
                 warnings.append('部分原始标的研究缓存不足，未声称重新完整核验；原排名保留。')
+                vetoes.setdefault(symbol, {'symbol': symbol, 'source': '原队列发布后复核',
+                    'reason': '当前原始标的研究缓存缺失，无法核验',
+                    'observed_at': moment.isoformat(), 'withdrawn': True})
                 continue
             risk = stock.get('chase_risk') if isinstance(stock.get('chase_risk'), dict) else {}
             metrics = risk.get('metrics') if isinstance(risk.get('metrics'), dict) else {}
@@ -570,7 +585,8 @@ def _cohort_risks(saved, moment, service=None):
                 elif quote_evidence['quote_basis'] == 'auction_previous_close_unverified':
                     warnings.append('当日竞价报价不用于重排，尚未完成新价格核验；保留此前已核验收盘证据与原队列，不因报价日期切换自动撤销。')
             why = None
-            if stock.get('stale') is not False or stock.get('date') != target:
+            if (stock.get('date') != target or not (stock.get('stale') is False
+                    or stock.get('stale') is True and historical_view)):
                 why = '当前原始标的行情已过期或日期不符'
             elif (stock.get('excluded') is True or core.exclusion(symbol, stock.get('name', ''), quote)
                   or 'ST' in str(stock.get('name', '')).upper() or '退' in str(stock.get('name', ''))):
@@ -584,9 +600,53 @@ def _cohort_risks(saved, moment, service=None):
             if why:
                 vetoes.setdefault(symbol, {'symbol': symbol, 'source': '原队列发布后复核', 'reason': why,
                                            'observed_at': moment.isoformat(), 'withdrawn': True})
+            elif historical_view and stock.get('stale') is True and quote_evidence.get('quote_consistent') is True:
+                verified_historical_stale.add(symbol)
     except Exception:
         warnings.append('原队列研究缓存不足，保留原始生成时间和排名；本次未声称重新计算或完整行情复核。')
-    return list(vetoes.values()), verification, warnings
+    return list(vetoes.values()), verification, warnings, verified_historical_stale
+
+
+def _correct_20261021_historical_display_error(saved, moment, current_alerts, verified_historical_stale):
+    """Correct only the independently identified 21 October presentation bug.
+
+    The original erroneous archive remains in Git history. This is deliberately
+    not a general risk-restoration rule: all five original records must match,
+    and all five must now pass the historical-data and current-risk recheck.
+    """
+    expected = (('sh601956', 56.34), ('sh603418', 55.02), ('sh688575', 53.88),
+                ('sh603466', 53.88), ('sh603711', 53.58))
+    symbols = {symbol for symbol, _ in expected}
+    first_error = _instant('2026-10-21T19:14:16.523794+08:00')
+    reviewed = _instant(saved.get('review_at'))
+    items, alerts, withdrawn = saved.get('items'), saved.get('alerts'), saved.get('withdrawn_symbols')
+    if (moment.date().isoformat() != '2026-10-21' or saved.get('date') != '2026-10-21'
+            or saved.get('data_date') != '2026-10-20' or saved.get('signal_date') != '2026-10-20'
+            or saved.get('protocol') != PROTOCOL or saved.get('status') != 'watch_only'
+            or saved.get('published_at') != '2026-10-21T14:39:02.640852+08:00'
+            or not reviewed or not first_error <= reviewed <= moment
+            or not isinstance(items, list) or len(items) != 5
+            or any(not isinstance(item, dict) for item in items)
+            or tuple((item.get('symbol'), item.get('score')) for item in items) != expected
+            or not isinstance(alerts, list) or len(alerts) != 5
+            or any(not isinstance(alert, dict) or alert.get('source') != '原队列发布后复核'
+                   or not isinstance(alert.get('symbol'), str)
+                   or alert.get('reason') != '当前原始标的行情已过期或日期不符'
+                   or alert.get('withdrawn') is not True for alert in alerts)
+            or {alert.get('symbol') for alert in alerts} != symbols
+            or not isinstance(withdrawn, list) or len(withdrawn) != 5
+            or any(not isinstance(symbol, str) for symbol in withdrawn) or set(withdrawn) != symbols
+            or set(verified_historical_stale) != symbols
+            or any(alert.get('symbol') in symbols for alert in current_alerts if isinstance(alert, dict))):
+        return saved
+    result = copy.deepcopy(saved)
+    result['alerts'], result['withdrawn_symbols'] = [], []
+    obsolete = '揭榜后出现负向证据；命中标的观察资格本日持续撤销，原始排名保留，不事后递补首位。'
+    correction = (f'2026-10-21日期校验错误更正：{reviewed.isoformat()}复核曾将20日历史报告的展示过期标记误判为五只原标的风险；'
+                  '本次逐项核验历史行情、报价与已知风险后，仅更正该错误撤销，原发布排序、分数和时间不变。'
+                  '原误判档案可追溯：https://github.com/Dopagip00/gup/commit/c618bb18e7ffeb10325f6ec331b4c670ced83f1c')
+    result['warnings'] = list(dict.fromkeys([correction] + [warning for warning in result.get('warnings', []) if warning != obsolete]))
+    return result
 
 
 def _with_alerts(saved, moment, service=None):
@@ -595,7 +655,10 @@ def _with_alerts(saved, moment, service=None):
         result['top_pick'] = result['items'][0]
     if result.get('date') != moment.date().isoformat():
         return result
-    alerts, verification, warnings = _cohort_risks(result, moment, service)
+    alerts, verification, warnings, verified_historical_stale = _cohort_risks(result, moment, service)
+    previous_warnings = list(result.get('warnings', []))
+    result = _correct_20261021_historical_display_error(result, moment, alerts, verified_historical_stale)
+    correction_warnings = [warning for warning in result.get('warnings', []) if warning not in previous_warnings]
     _merge_alerts(result, {'alerts': alerts})
     result['current_risk_verification'] = verification
     result['review_at'] = moment.isoformat()
@@ -611,6 +674,13 @@ def _with_alerts(saved, moment, service=None):
                     and current.get('date') == result['date'] and current.get('published_at')):
                 # Read the latest stored cohort under the same transaction;
                 # concurrent risk observers cannot erase each other's vetoes.
+                latest = current
+                current = _correct_20261021_historical_display_error(current, moment, alerts, verified_historical_stale)
+                if current is latest and correction_warnings:
+                    # A concurrent risk can invalidate the tentative correction.
+                    # Keep that risk and omit this uncommitted correction notice;
+                    # any earlier genuine correction notice stays on `current`.
+                    result['warnings'] = [warning for warning in result['warnings'] if warning not in correction_warnings]
                 result = _merge_alerts(copy.deepcopy(current), result)
                 result.update(review_at=moment.isoformat(), current_risk_verification=verification, rankings_immutable=True)
                 result['warnings'] = list(dict.fromkeys(list(result.get('warnings', [])) + warnings))

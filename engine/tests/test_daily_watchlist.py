@@ -516,11 +516,190 @@ class WatchlistTests(unittest.TestCase):
         self.assertIn(prepared['top_pick']['symbol'], withdrawn['withdrawn_symbols'])
         self.assertEqual(withdrawn['items'], original)
 
+    def historical_cohort_dashboard(self, target):
+        result = self.dashboard(target)
+        result['meta'] = {'report_date': target, 'data_date': target, 'expected_date': '2026-10-20'}
+        result['stocks'] = [real_core.gate_signal(stock, '2026-10-20') for stock in result['stocks']]
+        return result
+
+    def test_after_close_historical_display_stale_does_not_withdraw_original_cohort(self):
+        published = watch.publish(service=self.service, now=self.moment)
+        original = copy.deepcopy(published['items'])
+        self.intraday_quotes()
+        self.service.dashboard = self.historical_cohort_dashboard
+        result = watch.read(service=self.service, now=self.moment.replace(hour=18))
+        self.assertEqual(result['items'], original)
+        self.assertEqual(result['published_at'], published['published_at'])
+        self.assertEqual(result['withdrawn_symbols'], [])
+        self.assertEqual(result['alerts'], [])
+        self.assertEqual(self.calls[-1], '2026-10-19')
+        self.assertEqual(set(result['current_risk_verification']['quotes']), set(self.symbols(published)))
+
+    def test_historical_stale_exception_requires_exact_report_index_and_actual_latest_session(self):
+        published = watch.publish(service=self.service, now=self.moment)
+        self.intraday_quotes()
+        cases = [lambda data: data.pop('meta'),
+                 lambda data: data['meta'].update(report_date='2026-10-16'),
+                 lambda data: data['meta'].update(data_date='2026-10-16'),
+                 lambda data: data['meta'].update(expected_date='2026-10-19'),
+                 lambda data: data['meta'].update(expected_date='2026-10-21'),
+                 lambda data: data['index'].update(date='2026-10-16')]
+        for mutate in cases:
+            with self.subTest(mutate=mutate):
+                self.put(watch.KEY_PREFIX + published['date'], published)
+                data = self.historical_cohort_dashboard('2026-10-19')
+                mutate(data)
+                self.service.dashboard = lambda target: copy.deepcopy(data)
+                result = watch.read(service=self.service, now=self.moment.replace(hour=18))
+                self.assertEqual(set(result['withdrawn_symbols']), set(self.symbols(published)))
+                self.assertEqual(result['items'], published['items'])
+
+    def test_historical_stale_exception_keeps_missing_dates_risk_and_quote_vetoes(self):
+        published = watch.publish(service=self.service, now=self.moment)
+        original_quotes = self.intraday_quotes()
+        first = published['top_pick']['symbol']
+        cases = ('wrong_date', 'missing_row', 'chase_blocked', 'price_incomplete',
+                 'benchmark_unaligned', 'quote_mismatch', 'quote_suspended', 'announcement')
+        for case in cases:
+            with self.subTest(case=case):
+                self.put(watch.KEY_PREFIX + published['date'], published)
+                self.put('valuation_quotes', original_quotes)
+                self.put('morning_news', {})
+                data = self.historical_cohort_dashboard('2026-10-19')
+                row = next(item for item in data['stocks'] if item['symbol'] == first)
+                if case == 'wrong_date': row['date'] = '2026-10-16'
+                elif case == 'missing_row': data['stocks'].remove(row)
+                elif case == 'chase_blocked': row['chase_risk']['blocked'] = True
+                elif case == 'price_incomplete': row['chase_risk']['metrics']['raw_price_complete'] = False
+                elif case == 'benchmark_unaligned': row['chase_risk']['metrics']['benchmark_aligned'] = False
+                elif case in ('quote_mismatch', 'quote_suspended'):
+                    quotes = copy.deepcopy(original_quotes)
+                    quotes['quotes'][first].update({'previous_close': 10.03} if case == 'quote_mismatch' else {'suspended': True})
+                    self.put('valuation_quotes', quotes)
+                else:
+                    self.put('morning_news', {'as_of': self.moment.isoformat(),
+                        'risk_exclusions': [{'symbol': first, 'reason': '已公告立案风险'}]})
+                self.service.dashboard = lambda target: copy.deepcopy(data)
+                result = watch.read(service=self.service, now=self.moment.replace(hour=18))
+                self.assertIn(first, result['withdrawn_symbols'])
+                self.assertEqual(result['items'], published['items'])
+
     def historical_finance(self):
         self.finance.update(as_of='2026-10-16',fetched_at='2026-10-16T17:00:00+08:00')
         for row in self.finance['stocks']:
             row.update(date='2026-10-16',quote_date='2026-10-16',
                        roe_report_date='2025-12-31',roe_publication_date='2026-04-20')
+
+    def correctable_20261021_cohort(self):
+        saved = watch.publish(service=self.service, now=self.moment)
+        expected = (('sh601956', 56.34), ('sh603418', 55.02), ('sh688575', 53.88),
+                    ('sh603466', 53.88), ('sh603711', 53.58))
+        saved.update(date='2026-10-21', data_date='2026-10-20', signal_date='2026-10-20',
+            published_at='2026-10-21T14:39:02.640852+08:00',
+            generated_at='2026-10-21T14:39:02.640852+08:00',
+            review_at='2026-10-21T19:14:16.523794+08:00')
+        self.stocks = [self.stock(i) for i in range(5)]
+        for item, stock, (symbol, score) in zip(saved['items'], self.stocks, expected):
+            item.update(symbol=symbol, score=score, asof='2026-10-20')
+            stock.update(symbol=symbol, date='2026-10-20', fetched_at='2026-10-20T16:00:00+08:00')
+            stock['chase_risk']['as_of_date'] = '2026-10-20'
+        saved['top_pick'] = saved['items'][0]
+        saved['alerts'] = [{'symbol': symbol, 'source': '原队列发布后复核',
+            'reason': '当前原始标的行情已过期或日期不符', 'withdrawn': True} for symbol, _ in expected]
+        saved['withdrawn_symbols'] = [symbol for symbol, _ in expected]
+        self.moment = dt.datetime(2026, 10, 21, 19, 30, tzinfo=real_core.TZ)
+        quotes = {stock['symbol']: dict(self.quote(stock['symbol']), date='2026-10-21',
+            datetime='2026-10-21T19:25:00+08:00', fetched_at='2026-10-21T19:26:00+08:00',
+            previous_close=10, price=8.5, source='https://qt.gtimg.cn/') for stock in self.stocks}
+        self.put('valuation_quotes', {'as_of': '2026-10-21', 'fetched_at': '2026-10-21T19:26:00+08:00', 'quotes': quotes})
+        def historical(target):
+            return {'meta': {'report_date': target, 'data_date': target, 'expected_date': '2026-10-21'},
+                    'index': {'date': target},
+                    'stocks': [real_core.gate_signal(stock, '2026-10-21') for stock in copy.deepcopy(self.stocks)]}
+        self.service.dashboard = historical
+        self.put(watch.KEY_PREFIX + saved['date'], saved)
+        return saved
+
+    def test_exact_20261021_display_error_is_corrected_with_auditable_warning_and_original_ranking(self):
+        saved = self.correctable_20261021_cohort()
+        result = watch.read(service=self.service, now=self.moment)
+        self.assertEqual(result['alerts'], [])
+        self.assertEqual(result['withdrawn_symbols'], [])
+        self.assertEqual(result['items'], saved['items'])
+        self.assertEqual(result['published_at'], saved['published_at'])
+        self.assertTrue(any('日期校验错误更正' in warning and 'c618bb18e7ffeb10325f6ec331b4c670ced83f1c' in warning for warning in result['warnings']))
+        self.assertEqual(self.get(watch.KEY_PREFIX + saved['date'])['withdrawn_symbols'], [])
+        # The correction is a single persisted transition, not a daily restore.
+        repeated = watch.read(service=self.service, now=self.moment + dt.timedelta(minutes=1))
+        self.assertEqual(repeated['alerts'], [])
+        self.assertEqual(repeated['warnings'], result['warnings'])
+
+    def test_20261021_correction_refuses_other_times_sources_scores_symbols_and_extra_alerts(self):
+        saved = self.correctable_20261021_cohort()
+        cases = [lambda data: data.update(review_at='2026-10-21T19:14:16.523793+08:00'),
+                 lambda data: data.update(review_at='2026-10-21T19:31:00+08:00'),
+                 lambda data: data.update(published_at='2026-10-21T14:39:02.640853+08:00'),
+                 lambda data: data['alerts'][0].update(source='官方风险'),
+                 lambda data: data['alerts'][0].update(reason='真实风险'),
+                 lambda data: data['items'][0].update(score=56.35),
+                 lambda data: data['items'].reverse(),
+                 lambda data: data['alerts'].append({'symbol': data['items'][0]['symbol'], 'source': '官方风险', 'reason': '真实风险', 'withdrawn': True})]
+        for mutate in cases:
+            with self.subTest(mutate=mutate):
+                changed = copy.deepcopy(saved)
+                mutate(changed)
+                self.put(watch.KEY_PREFIX + changed['date'], changed)
+                result = watch.read(service=self.service, now=self.moment)
+                self.assertEqual(set(result['withdrawn_symbols']), set(saved['withdrawn_symbols']))
+                self.assertTrue(all(alert in result['alerts'] for alert in changed['alerts']))
+                self.assertFalse(any('日期校验错误更正' in warning for warning in result['warnings']))
+        self.put(watch.KEY_PREFIX + saved['date'], saved)
+        later_day = watch.read(saved['date'], service=self.service, now=self.moment + dt.timedelta(days=1))
+        self.assertEqual(later_day['alerts'], saved['alerts'])
+
+    def test_20261021_correction_requires_all_five_current_checks_and_keeps_new_negative_evidence(self):
+        saved = self.correctable_20261021_cohort()
+        stocks = copy.deepcopy(self.stocks)
+        for case in ('new_announcement', 'bad_date', 'missing_row', 'blocked', 'quote_mismatch'):
+            with self.subTest(case=case):
+                self.stocks = copy.deepcopy(stocks)
+                self.put(watch.KEY_PREFIX + saved['date'], saved)
+                self.put('morning_news', {})
+                quotes = self.get('valuation_quotes')
+                quotes['quotes'][saved['items'][0]['symbol']]['previous_close'] = 10
+                self.put('valuation_quotes', quotes)
+                if case == 'new_announcement':
+                    self.put('morning_news', {'as_of': self.moment.isoformat(), 'risk_exclusions': [
+                        {'symbol': saved['items'][0]['symbol'], 'reason': '最新立案公告风险'}]})
+                elif case == 'bad_date': self.stocks[0]['date'] = '2026-10-19'
+                elif case == 'missing_row': self.stocks.pop(0)
+                elif case == 'blocked': self.stocks[0]['chase_risk']['blocked'] = True
+                else:
+                    quotes['quotes'][saved['items'][0]['symbol']]['previous_close'] = 10.03
+                    self.put('valuation_quotes', quotes)
+                result = watch.read(service=self.service, now=self.moment)
+                self.assertEqual(set(result['withdrawn_symbols']), set(saved['withdrawn_symbols']))
+                self.assertTrue(all(alert in result['alerts'] for alert in saved['alerts']))
+                self.assertFalse(any('日期校验错误更正' in warning for warning in result['warnings']))
+                if case == 'new_announcement':
+                    self.assertTrue(any(alert['reason'] == '最新立案公告风险' for alert in result['alerts']))
+
+    def test_20261021_correction_cannot_erase_concurrent_new_risk_in_latest_transaction(self):
+        saved = self.correctable_20261021_cohort()
+        actual_review = watch._cohort_risks
+        concurrent = {'symbol': saved['items'][0]['symbol'], 'source': '并发官方风险复核', 'reason': '最新停牌公告', 'withdrawn': True}
+        def review_and_record(*args, **kwargs):
+            result = actual_review(*args, **kwargs)
+            latest = self.get(watch.KEY_PREFIX + saved['date'])
+            latest['alerts'].append(concurrent)
+            self.put(watch.KEY_PREFIX + saved['date'], latest)
+            return result
+        with patch.object(watch, '_cohort_risks', side_effect=review_and_record):
+            result = watch.read(service=self.service, now=self.moment)
+        self.assertIn(concurrent, result['alerts'])
+        self.assertIn(concurrent, self.get(watch.KEY_PREFIX + saved['date'])['alerts'])
+        self.assertEqual(set(result['withdrawn_symbols']), set(saved['withdrawn_symbols']))
+        self.assertFalse(any('日期校验错误更正' in warning for warning in result['warnings']))
 
     def test_disclosed_quality_recomputed_without_stale_valuation_or_total_score(self):
         self.historical_finance()

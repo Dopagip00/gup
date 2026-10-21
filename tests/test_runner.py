@@ -703,6 +703,92 @@ class RunnerTests(unittest.TestCase):
             incoming=copy.deepcopy(base);mutate(incoming)
             with self.assertRaisesRegex(ValueError,'冲突'):runner.merge_watchlist_risks(base,incoming,moment)
 
+    def incident_watchlist_fixture(self):
+        database=self.root/'incident-watch.sqlite3';make_db(database)
+        core=FakeCore(dt.datetime(2026,10,21,20,tzinfo=runner.TZ),database=database)
+        core.TZ=runner.TZ
+        @contextlib.contextmanager
+        def connect():
+            con=sqlite3.connect(database);con.row_factory=sqlite3.Row
+            try:
+                with con:yield con
+            finally:con.close()
+        core.connect=connect
+        expected=(('sh601956',56.34),('sh603418',55.02),('sh688575',53.88),('sh603466',53.88),('sh603711',53.58))
+        base=self.watchlist()
+        base.update(date='2026-10-21',data_date='2026-10-20',signal_date='2026-10-20',
+            generated_at='2026-10-21T14:39:02.640852+08:00',release_at='2026-10-21T09:00:00+08:00',
+            published_at='2026-10-21T14:39:02.640852+08:00',review_at='2026-10-21T19:14:16.523794+08:00',
+            rankings_immutable=True)
+        base['items']=[dict(base['items'][0],symbol=symbol,score=score,asof='2026-10-20') for symbol,score in expected]
+        base['top_pick']=base['items'][0]
+        base['alerts']=[{'symbol':symbol,'source':'原队列发布后复核','reason':'当前原始标的行情已过期或日期不符','withdrawn':True} for symbol,_ in expected]
+        base['withdrawn_symbols']=[symbol for symbol,_ in expected]
+        key='daily_watchlist:'+base['date'];path=self.root/'incident-archive.json'
+        def write_archive(value):
+            cohorts={value['date']:value}
+            path.write_text(runner.canonical({'schema_version':1,'watchlists':cohorts,
+                'sha256':hashlib.sha256(runner.canonical(cohorts).encode()).hexdigest()}),encoding='utf-8')
+        def store(value):
+            with core.connect() as con:con.execute('INSERT OR REPLACE INTO kv VALUES(?,?)',(key,runner.encode(value)))
+        def saved():
+            with core.connect() as con:return json.loads(con.execute('SELECT value FROM kv WHERE key=?',(key,)).fetchone()[0])
+        store(base);write_archive(base)
+        return core,base,path,write_archive,store,saved
+
+    def test_incident_archive_restore_cannot_resurrect_verified_display_errors_when_saved(self):
+        import daily_watchlist as watch
+        core,base,path,write_archive,store,saved=self.incident_watchlist_fixture()
+        symbols=set(base['withdrawn_symbols'])
+        # Emulate export having already corrected the DB while the repository
+        # archive still contains the original erroneous review.
+        corrected=watch._correct_20261021_historical_display_error(base,core.now(),[],symbols)
+        corrected['review_at']=core.now().isoformat();store(corrected)
+        with patch.object(watch,'core',core),patch.object(watch,'_cohort_risks',return_value=([],{},[],symbols)) as review:
+            self.assertEqual(runner.save_watchlists(core,path),1)
+            published=json.loads(path.read_text(encoding='utf-8'))
+            value=published['watchlists'][base['date']]
+            self.assertEqual(value['withdrawn_symbols'],[]);self.assertEqual(value['alerts'],[])
+            self.assertEqual(saved()['alerts'],[])
+            self.assertEqual(value['items'],base['items']);self.assertEqual(value['published_at'],base['published_at'])
+            self.assertTrue(any('c618bb18e7ffeb10325f6ec331b4c670ced83f1c' in warning for warning in value['warnings']))
+            self.assertEqual(published['sha256'],hashlib.sha256(runner.canonical(published['watchlists']).encode()).hexdigest())
+            # A second stale restore must undergo the same real-evidence guard.
+            write_archive(base);runner.save_watchlists(core,path)
+            self.assertEqual(saved()['alerts'],[]);self.assertEqual(review.call_count,2)
+
+    def test_incident_save_keeps_new_risk_or_incomplete_current_evidence(self):
+        import daily_watchlist as watch
+        core,base,path,write_archive,store,saved=self.incident_watchlist_fixture()
+        symbols=set(base['withdrawn_symbols'])
+        risk={'symbol':base['items'][0]['symbol'],'source':'官方公告已知风险','reason':'新发现停牌','withdrawn':True}
+        for case in ('new_risk','incomplete_evidence'):
+            with self.subTest(case=case):
+                store(base);write_archive(base)
+                current=[risk] if case=='new_risk' else []
+                verified=symbols if case=='new_risk' else symbols-{base['items'][0]['symbol']}
+                with patch.object(watch,'core',core),patch.object(watch,'_cohort_risks',return_value=(current,{},[],verified)):
+                    runner.save_watchlists(core,path)
+                value=json.loads(path.read_text(encoding='utf-8'))['watchlists'][base['date']]
+                self.assertEqual(set(value['withdrawn_symbols']),symbols)
+                self.assertTrue(all(alert in value['alerts'] for alert in base['alerts']))
+                self.assertEqual(value['alerts'],saved()['alerts'])
+                if case=='new_risk':self.assertIn(risk,value['alerts'])
+
+    def test_incident_recheck_is_not_run_on_other_days_or_without_a_published_cohort(self):
+        core,base,path,write_archive,store,saved=self.incident_watchlist_fixture()
+        core.now=lambda:dt.datetime(2026,10,22,20,tzinfo=runner.TZ)
+        with patch.object(runner.importlib,'import_module') as imports:
+            runner.save_watchlists(core,path)
+            imports.assert_not_called()
+        self.assertEqual(saved()['alerts'],base['alerts'])
+        core.now=lambda:dt.datetime(2026,10,21,20,tzinfo=runner.TZ)
+        prepared=copy.deepcopy(base);prepared.update(published_at=None,alerts=[],withdrawn_symbols=[])
+        store(prepared);write_archive(prepared)
+        with patch.object(runner.importlib,'import_module') as imports:
+            runner.save_watchlists(core,path)
+            imports.assert_not_called()
+
     def test_future_risk_review_or_observation_cannot_enter_a_released_cohort(self):
         base=dict(self.watchlist(),published_at='2026-10-19T09:03:00+08:00')
         fresh=dict(base,review_at='2026-10-19T09:11:00+08:00',

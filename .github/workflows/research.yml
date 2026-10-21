@@ -391,7 +391,7 @@ jobs:
           name: github-pages-longterm
           path: public
   deploy-longterm:
-    if: github.repository == 'Dopagip00/gup' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && needs.fundamentals.outputs.site_ready == 'true' && vars.ENABLE_PAGES_DEPLOY != 'false'
+    if: always() && needs.fundamentals.result == 'success' && github.repository == 'Dopagip00/gup' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && needs.fundamentals.outputs.site_ready == 'true' && vars.ENABLE_PAGES_DEPLOY != 'false'
     needs: fundamentals
     runs-on: ubuntu-latest
     permissions:

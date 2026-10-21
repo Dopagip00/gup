@@ -442,6 +442,18 @@ def merge_watchlist_risks(old, incoming, moment):
 
 def save_watchlists(core, path):
     if path.is_file():restore_watchlists(path,core)
+    moment=core.now()
+    if moment.astimezone(TZ).date()==dt.date(2026,10,21):
+        # Recovery normally unions every saved risk. On this one identified
+        # incident day, recheck the final merged record before serialization so
+        # the old archive cannot resurrect its historical-display false alarms.
+        # The engine's exact cohort guard and fresh evidence decide whether a
+        # correction is allowed; ordinary or newly observed risks remain a union.
+        with core.connect() as con:
+            row=con.execute('SELECT value FROM kv WHERE key=?',('daily_watchlist:2026-10-21',)).fetchone()
+        current=json.loads(row[0]) if row else None
+        if isinstance(current,dict) and current.get('published_at'):
+            importlib.import_module('daily_watchlist')._with_alerts(current,moment)
     with core.connect() as con:
         rows=con.execute("SELECT key,value FROM kv WHERE key LIKE 'daily_watchlist:%' ORDER BY key").fetchall()
     cohorts=checked_watchlists({key[len('daily_watchlist:'):]:json.loads(raw) for key,raw in rows})
