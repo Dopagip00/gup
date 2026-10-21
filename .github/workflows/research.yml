@@ -83,6 +83,7 @@ jobs:
     outputs:
       site_ready: ${{ steps.research.outputs.site_ready }}
       stage: ${{ steps.stage.outputs.stage }}
+      close_ready: ${{ steps.research.outputs.close_ready }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -293,7 +294,7 @@ jobs:
     # Long financial refresh must not hold the shared queue ahead of 09:11/09:19
     # publication recovery. The last retry and closing updates continue the financial chain;
     # a manual fundamentals run executes that stage directly in research above.
-    if: always() && needs.deploy.result == 'success' && needs.health.outputs.data_ready == 'true' && github.event_name == 'schedule' && (github.event.schedule == '19 1 * * 1-5' || github.event.schedule == '20 8 * * 1-5' || github.event.schedule == '10 9 * * 1-5')
+    if: always() && needs.deploy.result == 'success' && needs.health.outputs.data_ready == 'true' && ((github.event_name == 'schedule' && (github.event.schedule == '19 1 * * 1-5' || github.event.schedule == '20 8 * * 1-5' || github.event.schedule == '10 9 * * 1-5')) || needs.research.outputs.close_ready == 'true')
     needs: [research, deploy, health]
     runs-on: ubuntu-latest
     timeout-minutes: 90

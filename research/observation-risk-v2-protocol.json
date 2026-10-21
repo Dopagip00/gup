@@ -1,0 +1,18 @@
+{
+  "protocol": "fixed-observation-risk-v2-audit-20261021",
+  "registered_at": "2026-10-21T17:08:34+08:00",
+  "purpose": "Prefix-only price-risk audit; no coefficient selection from audit outcomes",
+  "universe": "Current active Shanghai securities, sort SHA256(symbol), first 120; disclose survivorship bias",
+  "signal_dates": "Cached benchmark positions [-242:-2:10], fixed before outcome calculation; no 2026-10-21 feedback day",
+  "financial_performance_tested": false,
+  "financial_reason": "No point-in-time historical financial snapshots; never backfill today's cached facts into old dates",
+  "baseline": "Existing anti-chase hard vetoes and descending raw technical score, ATR tie break",
+  "candidate": "Same hard vetoes; risk-adjust technical score using only prior 60 daily returns and 20-day liquidity proxy",
+  "risk_formula": "min(30, 2*ATR14_pct + 3*downside_deviation60_pct*(1.5 if index close<MA60 and return20<0 else 1) + 0.25*max_drawdown60_pct + 10*(1-min(1,median20(raw_close*volume_lots*100)/20000000)))",
+  "score_formula": "0.60*max(0,technical_raw-risk_penalty); financial unavailable in this historical price-only audit",
+  "outcome": "D1 raw open to D2 raw close, fixed 0.30 percentage-point roundtrip cost stress; top1 and equal-weight top5",
+  "benchmarks": ["cash=0", "same-date Shanghai index D1 open to D2 close"],
+  "summaries": ["mean per opportunity", "worst date", "worst 10% mean", "synthetic drawdown", "mean ATR and downside risk"],
+  "deployment_rule": "Do not change coefficients after this audit. If both mean versus same-date benchmark and lower-tail outcomes worsen, keep candidate offline. Other tradeoffs must be disclosed, never claim validated accuracy.",
+  "limitations": ["current-universe survivorship", "current qfq history cannot restore every historical adjustment vintage", "shared market shocks", "no historical full news/status/financial snapshots", "no real order-fill model", "not actual published-cohort performance"]
+}

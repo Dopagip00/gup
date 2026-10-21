@@ -18,6 +18,7 @@ class WatchlistTests(unittest.TestCase):
         self.db.row_factory = sqlite3.Row
         self.db.execute('CREATE TABLE kv(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
         self.calls = []
+        self.histories = {}
         self.stocks = [self.stock(i) for i in range(7)]
         self.finance = {'as_of': '2026-10-19', 'fetched_at': '2026-10-19T16:00:00+08:00',
                         'stocks': [self.financial(i) for i in range(6)]}
@@ -27,7 +28,7 @@ class WatchlistTests(unittest.TestCase):
         fake_core = types.SimpleNamespace(TZ=real_core.TZ, strategy=real_core.strategy,
             now=lambda: self.moment, getkv=self.get, putkv=self.put, connect=self.connect,
             encode=real_core.encode, quote_gate=real_core.quote_gate, exclusion=real_core.exclusion,
-            Service=lambda: self.service)
+            Service=lambda: self.service, load_history=self.history)
         self.patches = [patch.object(watch, 'core', fake_core),
                         patch.object(watch.md, 'is_trading_day', side_effect=lambda day: self.day(day).weekday() < 5),
                         patch.object(watch.md, 'last_completed_session', side_effect=self.last_completed)]
@@ -73,6 +74,17 @@ class WatchlistTests(unittest.TestCase):
                 'recurring_profit_ratio': .8, 'debt_ratio': 40, 'ttm_parent_netprofit_100m': 2,
                 'report_date': '2026-06-30', 'publication_date': '2026-08-20', 'provider_update_date': '2026-08-20'}
 
+    def history(self, symbol):
+        if symbol in self.histories:
+            return copy.deepcopy(self.histories[symbol])
+        end = self.day(self.stocks[0]['date'])
+        dates=[]
+        while len(dates)<120:
+            if end.weekday()<5:dates.append(end.isoformat())
+            end-=dt.timedelta(days=1)
+        return {'bars':[{'date':day,'open':10,'high':10.1,'low':9.9,'close':10,
+                         'raw_close':10,'volume':100000} for day in reversed(dates)]}
+
     def dashboard(self, target):
         self.calls.append(target)
         return {'stocks': copy.deepcopy(self.stocks), 'index': {'date': self.stocks[0]['date']}}
@@ -115,7 +127,8 @@ class WatchlistTests(unittest.TestCase):
         result = self.build()
         self.assertEqual(self.symbols(result)[0], 'sh600005')
         self.assertNotIn('sh600006', self.symbols(result))
-        self.assertAlmostEqual(result['top_pick']['score'], .6 * 85 + .4 * 80)
+        self.assertEqual(result['top_pick']['components']['technical_raw'],85)
+        self.assertAlmostEqual(result['top_pick']['score'], .6 * result['top_pick']['components']['technical'] + .4 * 80)
         for stock in self.stocks:
             stock['prediction']['expected_return_pct'] *= -100
         self.assertEqual(self.symbols(result), self.symbols(self.build()))
@@ -502,6 +515,159 @@ class WatchlistTests(unittest.TestCase):
         withdrawn = watch.read(service=self.service, now=auction + dt.timedelta(minutes=1))
         self.assertIn(prepared['top_pick']['symbol'], withdrawn['withdrawn_symbols'])
         self.assertEqual(withdrawn['items'], original)
+
+    def historical_finance(self):
+        self.finance.update(as_of='2026-10-16',fetched_at='2026-10-16T17:00:00+08:00')
+        for row in self.finance['stocks']:
+            row.update(date='2026-10-16',quote_date='2026-10-16',
+                       roe_report_date='2025-12-31',roe_publication_date='2026-04-20')
+
+    def test_disclosed_quality_recomputed_without_stale_valuation_or_total_score(self):
+        self.historical_finance()
+        result=self.build()
+        self.assertEqual(result['coverage']['disclosed_quality_financial'],6)
+        self.assertEqual(result['coverage']['complete_financial'],0)
+        self.assertNotIn('sh600006',self.symbols(result))
+        item=result['top_pick']; verification=item['verification']
+        self.assertFalse(verification['financial_complete'])
+        self.assertTrue(verification['financial_quality_available'])
+        self.assertEqual(verification['financial_data_date'],'2026-10-16')
+        self.assertIsNone(verification['financial_valuation_date'])
+        self.assertEqual(verification['financial_evidence_basis'],'cached_disclosed_quality_without_valuation')
+        self.assertAlmostEqual(item['components']['financial'],round(42/65*100,3))
+        for row in self.finance['stocks']:row.update(pe_ttm=999999,pb=-100,score=0)
+        after=self.build()
+        self.assertEqual(self.symbols(result),self.symbols(after))
+        self.assertEqual(item['score'],after['top_pick']['score'])
+        self.assertTrue(any('估值待核验' in note for note in item['risk_notes']))
+
+    def test_quality_dates_nonfinite_profit_and_missing_roe_provenance_are_not_filled(self):
+        self.historical_finance()
+        original=copy.deepcopy(self.finance['stocks'][5])
+        mutations=({'publication_date':'2026-10-20'},{'provider_update_date':'2026-10-20'},
+                   {'roe_publication_date':'2026-10-20'},{'roe_report_date':'2026-06-30'},
+                   {'roe_publication_date':None},{'report_date':'2025-12-31'},
+                   {'roe':float('nan')},{'ttm_parent_netprofit_100m':-1},{'debt_ratio':101})
+        for change in mutations:
+            self.finance['stocks'][5]=dict(original,**change)
+            result=self.build()
+            self.assertNotIn('sh600005',self.symbols(result),change)
+        self.finance['stocks'][5]=original
+        self.finance['fetched_at']='2026-10-21T08:00:00+08:00'
+        self.assertFalse(any(item['verification']['financial_quality_available'] for item in self.build()['items']))
+
+    def test_low_base_growth_warning_caps_quality_growth_without_reusing_old_total(self):
+        self.historical_finance()
+        row=self.finance['stocks'][5]
+        row.update(revenue_growth=1000,profit_growth=1000,risks=['上年同期利润基数为零或亏损；增长可能失真'])
+        score=watch._disclosed_quality(row,self.finance,'2026-10-19',self.moment)
+        self.assertAlmostEqual(score,round(40/65*100,3))
+
+    def test_quality_preparation_releases_with_original_finance_date_and_frozen_ranking(self):
+        self.historical_finance()
+        early=self.moment.replace(hour=8)
+        prepared=watch.publish(service=self.service,now=early)
+        self.finance['stocks'][5]['roe']=0
+        released=watch.publish(service=self.service,now=self.moment)
+        self.assertEqual(prepared['items'],released['items'])
+        self.assertEqual(released['release_basis'],'prepared_cohort_frozen_at_release')
+        self.assertEqual(released['top_pick']['verification']['financial_data_date'],'2026-10-16')
+
+    def test_new_policy_rebuilds_only_unpublished_old_preparation(self):
+        early=self.moment.replace(hour=8)
+        prepared=watch.publish(service=self.service,now=early)
+        key=watch.KEY_PREFIX+'2026-10-20'
+        prepared['ranking_policy']='old-policy'
+        self.put(key,prepared)
+        self.stocks[5]['score']=70
+        rebuilt=watch.publish(service=self.service,now=self.moment)
+        self.assertEqual(rebuilt['ranking_policy'],watch.RANKING_POLICY)
+        self.assertNotEqual(prepared['items'],rebuilt['items'])
+        frozen=copy.deepcopy(rebuilt);frozen['ranking_policy']='old-published-policy'
+        self.put(key,frozen)
+        for row in self.stocks:row['score']=0
+        again=watch.publish(service=self.service,now=self.moment+dt.timedelta(minutes=1))
+        self.assertEqual(again['items'],frozen['items'])
+        self.assertEqual(again['ranking_policy'],'old-published-policy')
+        self.assertEqual(again['published_at'],frozen['published_at'])
+
+    def test_risk_profile_uses_only_aligned_prefix_and_liquidity_lots(self):
+        bars=self.history('sh600000')['bars'];index=copy.deepcopy(bars)
+        profile=watch._risk_profile(bars,index,'2026-10-19')
+        self.assertEqual(profile['risk_penalty'],4)
+        self.assertEqual(profile['liquidity_proxy_20d_cny'],100000000)
+        self.assertEqual(profile['return_samples'],60)
+        future=dict(bars[-1],date='2026-10-20',close=100,high=100,volume=1)
+        self.assertEqual(profile,watch._risk_profile(bars+[future],index+[future],'2026-10-19'))
+        self.assertIsNone(watch._risk_profile(bars[:-1],index,'2026-10-19'))
+        self.assertIsNone(watch._risk_profile(bars,index[:-2]+index[-1:],'2026-10-19'))
+        self.assertIsNone(watch._risk_profile(None,index,'2026-10-19'))
+        broken=copy.deepcopy(bars);broken[-1]['volume']=0
+        self.assertIsNone(watch._risk_profile(broken,index,'2026-10-19'))
+
+    def test_fixed_risk_penalty_deprioritizes_downside_volatility_and_weak_liquidity(self):
+        low=watch._risk_penalty(2,.5,5,50000000,'normal')
+        self.assertGreater(watch._risk_penalty(4,.5,5,50000000,'normal'),low)
+        self.assertGreater(watch._risk_penalty(2,2,5,50000000,'normal'),low)
+        self.assertGreater(watch._risk_penalty(2,.5,20,50000000,'normal'),low)
+        self.assertGreater(watch._risk_penalty(2,.5,5,1000000,'normal'),low)
+        self.assertGreater(watch._risk_penalty(2,.5,5,50000000,'defensive'),low)
+        self.assertEqual(watch._risk_penalty(50,50,50,1,'defensive'),30)
+
+    def test_risk_history_failure_excludes_candidate_instead_of_filling_neutral_risk(self):
+        self.histories['sh600005']={'bars':[]}
+        result=self.build()
+        self.assertNotIn('sh600005',self.symbols(result))
+        self.assertEqual(result['coverage']['excluded_counts']['risk_history_missing'],1)
+
+    def test_risk_history_invalid_dates_and_cached_close_mismatch_fail_safely(self):
+        bars=self.history('sh600005')['bars'];index=copy.deepcopy(bars)
+        bad=copy.deepcopy(bars);bad[-2]['date']='2026-10-18-invalid'
+        self.assertIsNone(watch._risk_profile(bad,index,'2026-10-19'))
+        for field,value in (('volume',float('inf')),('raw_close',float('nan')),('high',9)):
+            bad=copy.deepcopy(bars);bad[-1][field]=value
+            self.assertIsNone(watch._risk_profile(bad,index,'2026-10-19'))
+        self.stocks[5]['close']=9.99
+        self.assertNotIn('sh600005',self.symbols(self.build()))
+
+    def test_complete_then_historical_quality_then_missing_evidence_tiers(self):
+        self.historical_finance()
+        old=copy.deepcopy(self.finance)
+        self.finance.update(as_of='2026-10-19',fetched_at='2026-10-19T17:00:00+08:00')
+        # A snapshot has one valuation day. Per-record old quotes cannot be
+        # upgraded by mixing them into that snapshot; incomplete remains missing.
+        self.finance['stocks'][0]=self.financial(0)
+        self.assertTrue(self.build()['items'][0]['verification']['financial_complete'])
+        self.finance=old
+        self.finance['stocks']=self.finance['stocks'][:1]
+        self.stocks[0]['score']=50
+        result=self.build()
+        self.assertEqual(result['top_pick']['symbol'],'sh600000')
+        self.assertTrue(result['top_pick']['verification']['financial_quality_available'])
+        self.assertFalse(result['items'][1]['verification']['financial_quality_available'])
+
+    def test_tampered_risk_arithmetic_or_future_quality_cannot_release_without_source(self):
+        self.historical_finance()
+        prepared=watch.publish(service=self.service,now=self.moment.replace(hour=8))
+        key=watch.KEY_PREFIX+'2026-10-20'
+        for mutate in (lambda value:value['items'][0]['components'].update(risk_penalty=0),
+                       lambda value:value['items'][0]['verification'].update(risk_window_end='2026-10-20'),
+                       lambda value:value['items'][0]['verification'].update(financial_provider_update_date='2026-10-20'),
+                       lambda value:value['items'][0]['verification'].update(financial_roe_publication_date='2026-10-20')):
+            changed=copy.deepcopy(prepared);mutate(changed);self.put(key,changed)
+            missing=types.SimpleNamespace(dashboard=lambda target:{'stocks':[],'index':{'date':target}},longterm=lambda:{})
+            result=watch.publish(service=missing,now=self.moment)
+            self.assertEqual(result['status'],'insufficient_data')
+            self.assertIsNone(result['published_at'])
+
+    def test_complete_preparation_cannot_release_future_provider_update(self):
+        prepared=watch.publish(service=self.service,now=self.moment.replace(hour=8))
+        prepared['items'][0]['verification']['financial_provider_update_date']='2026-10-20'
+        self.put(watch.KEY_PREFIX+'2026-10-20',prepared)
+        missing=types.SimpleNamespace(dashboard=lambda target:{'stocks':[],'index':{'date':target}},longterm=lambda:{})
+        result=watch.publish(service=missing,now=self.moment)
+        self.assertEqual(result['status'],'insufficient_data')
+        self.assertIsNone(result['published_at'])
 
 
 if __name__ == '__main__':

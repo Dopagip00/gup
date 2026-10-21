@@ -1,0 +1,1200 @@
+{
+  "protocol": "fixed-observation-risk-v2-audit-20261021",
+  "protocol_sha256": "1f0afaaf125462429c49419466e01dbb5d9ae3c613c3be3646fe88074c7bf37e",
+  "evaluated_at": "2026-10-21T17:16:21.884839+08:00",
+  "history_asof": "2026-10-19",
+  "sample_symbols": [
+    "sh688041",
+    "sh600028",
+    "sh601939",
+    "sh603590",
+    "sh603029",
+    "sh603486",
+    "sh688021",
+    "sh601139",
+    "sh601089",
+    "sh603856",
+    "sh688630",
+    "sh600103",
+    "sh600844",
+    "sh688315",
+    "sh603658",
+    "sh688010",
+    "sh603111",
+    "sh688573",
+    "sh603100",
+    "sh603073",
+    "sh688088",
+    "sh688793",
+    "sh603185",
+    "sh688801",
+    "sh603272",
+    "sh601128",
+    "sh688079",
+    "sh605268",
+    "sh603896",
+    "sh688309",
+    "sh688099",
+    "sh603158",
+    "sh688443",
+    "sh688091",
+    "sh603778",
+    "sh688125",
+    "sh688663",
+    "sh603387",
+    "sh600071",
+    "sh688161",
+    "sh605588",
+    "sh688295",
+    "sh600067",
+    "sh603189",
+    "sh600255",
+    "sh688216",
+    "sh688711",
+    "sh688347",
+    "sh600050",
+    "sh600754",
+    "sh603928",
+    "sh603978",
+    "sh688515",
+    "sh600737",
+    "sh600879",
+    "sh600690",
+    "sh600503",
+    "sh603516",
+    "sh688063",
+    "sh601898",
+    "sh600365",
+    "sh600257",
+    "sh688055",
+    "sh601811",
+    "sh603890",
+    "sh688293",
+    "sh688783",
+    "sh600223",
+    "sh601020",
+    "sh601628",
+    "sh603210",
+    "sh600056",
+    "sh688371",
+    "sh600850",
+    "sh688778",
+    "sh603088",
+    "sh600048",
+    "sh688070",
+    "sh603757",
+    "sh603107",
+    "sh600980",
+    "sh688072",
+    "sh600839",
+    "sh600686",
+    "sh601228",
+    "sh688107",
+    "sh603613",
+    "sh600803",
+    "sh600370",
+    "sh603809",
+    "sh605299",
+    "sh603908",
+    "sh603499",
+    "sh600785",
+    "sh600332",
+    "sh601952",
+    "sh688190",
+    "sh600161",
+    "sh603206",
+    "sh600905",
+    "sh688603",
+    "sh603099",
+    "sh601678",
+    "sh600362",
+    "sh600397",
+    "sh603400",
+    "sh600331",
+    "sh603429",
+    "sh605296",
+    "sh600350",
+    "sh601860",
+    "sh603220",
+    "sh600201",
+    "sh603987",
+    "sh688591",
+    "sh688584",
+    "sh605158",
+    "sh688052",
+    "sh605016",
+    "sh600288"
+  ],
+  "signal_dates": [
+    "2025-10-20",
+    "2025-11-03",
+    "2025-11-17",
+    "2025-12-01",
+    "2025-12-15",
+    "2025-12-29",
+    "2026-01-14",
+    "2026-01-28",
+    "2026-02-11",
+    "2026-03-05",
+    "2026-03-19",
+    "2026-04-02",
+    "2026-04-17",
+    "2026-05-06",
+    "2026-05-20",
+    "2026-06-03",
+    "2026-06-17",
+    "2026-07-02",
+    "2026-07-16",
+    "2026-07-30",
+    "2026-08-13",
+    "2026-08-27",
+    "2026-09-10",
+    "2026-09-24"
+  ],
+  "financial_performance_tested": false,
+  "fee_stress_pct": 0.3,
+  "limitations": [
+    "current-universe survivorship",
+    "current qfq history cannot restore every historical adjustment vintage",
+    "shared market shocks",
+    "no historical full news/status/financial snapshots",
+    "no real order-fill model",
+    "not actual published-cohort performance"
+  ],
+  "per_date": [
+    {
+      "date": "2025-10-20",
+      "entry_date": "2025-10-21",
+      "exit_date": "2025-10-22",
+      "pool": 92,
+      "index_return_pct": 1.1112,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh600288"
+          ],
+          "net_return_pct": -0.2312
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh600288",
+            "sh601139",
+            "sh600879",
+            "sh600686",
+            "sh688125"
+          ],
+          "net_return_pct": -0.8438
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh601139"
+          ],
+          "net_return_pct": -2.3173
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh601139",
+            "sh600288",
+            "sh601228",
+            "sh600686",
+            "sh600879"
+          ],
+          "net_return_pct": -1.3221
+        }
+      }
+    },
+    {
+      "date": "2025-11-03",
+      "entry_date": "2025-11-04",
+      "exit_date": "2025-11-05",
+      "pool": 91,
+      "index_return_pct": -0.106,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603073"
+          ],
+          "net_return_pct": -0.4027
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603073",
+            "sh603029",
+            "sh600257",
+            "sh603099",
+            "sh600844"
+          ],
+          "net_return_pct": -0.0754
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh603073"
+          ],
+          "net_return_pct": -0.4027
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh603073",
+            "sh603029",
+            "sh600257",
+            "sh600844",
+            "sh603387"
+          ],
+          "net_return_pct": 0.0935
+        }
+      }
+    },
+    {
+      "date": "2025-11-17",
+      "entry_date": "2025-11-18",
+      "exit_date": "2025-11-19",
+      "pool": 92,
+      "index_return_pct": -0.3962,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh601678"
+          ],
+          "net_return_pct": -2.1828
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh601678",
+            "sh605299",
+            "sh688295",
+            "sh605268",
+            "sh688021"
+          ],
+          "net_return_pct": -2.887
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh601678"
+          ],
+          "net_return_pct": -2.1828
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh601678",
+            "sh600028",
+            "sh603387",
+            "sh605268",
+            "sh605299"
+          ],
+          "net_return_pct": -0.4018
+        }
+      }
+    },
+    {
+      "date": "2025-12-01",
+      "entry_date": "2025-12-02",
+      "exit_date": "2025-12-03",
+      "pool": 101,
+      "index_return_pct": -0.7793,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603890"
+          ],
+          "net_return_pct": -4.2927
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603890",
+            "sh605299",
+            "sh688099",
+            "sh600201",
+            "sh600028"
+          ],
+          "net_return_pct": 0.6486
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh600028"
+          ],
+          "net_return_pct": 1.4094
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh600028",
+            "sh600803",
+            "sh600201",
+            "sh605299",
+            "sh603890"
+          ],
+          "net_return_pct": 0.9034
+        }
+      }
+    },
+    {
+      "date": "2025-12-15",
+      "entry_date": "2025-12-16",
+      "exit_date": "2025-12-17",
+      "pool": 103,
+      "index_return_pct": 0.2271,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh601628"
+          ],
+          "net_return_pct": 1.8587
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh601628",
+            "sh603928",
+            "sh600686",
+            "sh600803",
+            "sh688125"
+          ],
+          "net_return_pct": -1.5747
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh601628"
+          ],
+          "net_return_pct": 1.8587
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh601628",
+            "sh600803",
+            "sh603928",
+            "sh600686",
+            "sh605268"
+          ],
+          "net_return_pct": -3.6043
+        }
+      }
+    },
+    {
+      "date": "2025-12-29",
+      "entry_date": "2025-12-30",
+      "exit_date": "2025-12-31",
+      "pool": 104,
+      "index_return_pct": 0.5312,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh600850"
+          ],
+          "net_return_pct": -0.4684
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh600850",
+            "sh688630",
+            "sh600028",
+            "sh688010",
+            "sh600331"
+          ],
+          "net_return_pct": 1.2566
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh600028"
+          ],
+          "net_return_pct": 2.872
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh600028",
+            "sh600850",
+            "sh600331",
+            "sh688630",
+            "sh601628"
+          ],
+          "net_return_pct": 1.0006
+        }
+      }
+    },
+    {
+      "date": "2026-01-14",
+      "entry_date": "2026-01-15",
+      "exit_date": "2026-01-16",
+      "pool": 102,
+      "index_return_pct": -0.105,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh688515"
+          ],
+          "net_return_pct": 6.0805
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh688515",
+            "sh600754",
+            "sh688010",
+            "sh688070",
+            "sh688052"
+          ],
+          "net_return_pct": 0.891
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh688515"
+          ],
+          "net_return_pct": 6.0805
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh688515",
+            "sh600754",
+            "sh600350",
+            "sh603387",
+            "sh688070"
+          ],
+          "net_return_pct": 0.1154
+        }
+      }
+    },
+    {
+      "date": "2026-01-28",
+      "entry_date": "2026-01-29",
+      "exit_date": "2026-01-30",
+      "pool": 102,
+      "index_return_pct": -0.9136,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh688107"
+          ],
+          "net_return_pct": -0.7941
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh688107",
+            "sh601811",
+            "sh688070",
+            "sh600255",
+            "sh600362"
+          ],
+          "net_return_pct": -1.5107
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh601139"
+          ],
+          "net_return_pct": -0.7335
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh601139",
+            "sh688107",
+            "sh601811",
+            "sh600255",
+            "sh600048"
+          ],
+          "net_return_pct": -1.7654
+        }
+      }
+    },
+    {
+      "date": "2026-02-11",
+      "entry_date": "2026-02-12",
+      "exit_date": "2026-02-13",
+      "pool": 105,
+      "index_return_pct": -1.3275,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603400"
+          ],
+          "net_return_pct": 0.4769
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603400",
+            "sh601898",
+            "sh600844",
+            "sh600028",
+            "sh605268"
+          ],
+          "net_return_pct": -1.9352
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh600028"
+          ],
+          "net_return_pct": -2.7502
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh600028",
+            "sh603400",
+            "sh605268",
+            "sh601128",
+            "sh601139"
+          ],
+          "net_return_pct": -1.854
+        }
+      }
+    },
+    {
+      "date": "2026-03-05",
+      "entry_date": "2026-03-06",
+      "exit_date": "2026-03-09",
+      "pool": 99,
+      "index_return_pct": 0.2619,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh688190"
+          ],
+          "net_return_pct": 9.2455
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh688190",
+            "sh603088",
+            "sh688603",
+            "sh603400",
+            "sh603896"
+          ],
+          "net_return_pct": -0.6346
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh600905"
+          ],
+          "net_return_pct": 1.5824
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh600905",
+            "sh601939",
+            "sh603896",
+            "sh603400",
+            "sh688190"
+          ],
+          "net_return_pct": 1.4118
+        }
+      }
+    },
+    {
+      "date": "2026-03-19",
+      "entry_date": "2026-03-20",
+      "exit_date": "2026-03-23",
+      "pool": 104,
+      "index_return_pct": -4.7768,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603757"
+          ],
+          "net_return_pct": -14.3687
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603757",
+            "sh605296",
+            "sh688063",
+            "sh601952",
+            "sh600905"
+          ],
+          "net_return_pct": -3.3178
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh605296"
+          ],
+          "net_return_pct": -4.3325
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh605296",
+            "sh600905",
+            "sh601939",
+            "sh601952",
+            "sh688063"
+          ],
+          "net_return_pct": -0.8685
+        }
+      }
+    },
+    {
+      "date": "2026-04-02",
+      "entry_date": "2026-04-03",
+      "exit_date": "2026-04-07",
+      "pool": 103,
+      "index_return_pct": -0.953,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh601939"
+          ],
+          "net_return_pct": -3.6578
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh601939",
+            "sh600350",
+            "sh605016",
+            "sh688309",
+            "sh600754"
+          ],
+          "net_return_pct": -4.0228
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh601939"
+          ],
+          "net_return_pct": -3.6578
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh601939",
+            "sh600350",
+            "sh605016",
+            "sh688161",
+            "sh600754"
+          ],
+          "net_return_pct": -3.2652
+        }
+      }
+    },
+    {
+      "date": "2026-04-17",
+      "entry_date": "2026-04-20",
+      "exit_date": "2026-04-21",
+      "pool": 101,
+      "index_return_pct": 0.7823,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh688663"
+          ],
+          "net_return_pct": -0.4875
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh688663",
+            "sh688010",
+            "sh688573",
+            "sh688079",
+            "sh600071"
+          ],
+          "net_return_pct": 1.1999
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh688663"
+          ],
+          "net_return_pct": -0.4875
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh688663",
+            "sh688010",
+            "sh600071",
+            "sh601939",
+            "sh601128"
+          ],
+          "net_return_pct": 1.9756
+        }
+      }
+    },
+    {
+      "date": "2026-05-06",
+      "entry_date": "2026-05-07",
+      "exit_date": "2026-05-08",
+      "pool": 102,
+      "index_return_pct": 0.2759,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603206"
+          ],
+          "net_return_pct": -0.3573
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603206",
+            "sh605016",
+            "sh688063",
+            "sh688663",
+            "sh600255"
+          ],
+          "net_return_pct": -0.5683
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh603206"
+          ],
+          "net_return_pct": -0.3573
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh603206",
+            "sh605016",
+            "sh603928",
+            "sh600255",
+            "sh603613"
+          ],
+          "net_return_pct": 0.6882
+        }
+      }
+    },
+    {
+      "date": "2026-05-20",
+      "entry_date": "2026-05-21",
+      "exit_date": "2026-05-22",
+      "pool": 95,
+      "index_return_pct": -1.4728,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh688573"
+          ],
+          "net_return_pct": -2.1189
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh688573",
+            "sh605588",
+            "sh603486",
+            "sh688711",
+            "sh603928"
+          ],
+          "net_return_pct": -2.584
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh601939"
+          ],
+          "net_return_pct": 2.7612
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh601939",
+            "sh603928",
+            "sh603486",
+            "sh600350",
+            "sh605588"
+          ],
+          "net_return_pct": 0.1888
+        }
+      }
+    },
+    {
+      "date": "2026-06-03",
+      "entry_date": "2026-06-04",
+      "exit_date": "2026-06-05",
+      "pool": 95,
+      "index_return_pct": -0.6397,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603099"
+          ],
+          "net_return_pct": -4.4036
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603099",
+            "sh600503",
+            "sh688783",
+            "sh688072",
+            "sh688711"
+          ],
+          "net_return_pct": -1.3088
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh603099"
+          ],
+          "net_return_pct": -4.4036
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh603099",
+            "sh600503",
+            "sh601939",
+            "sh600905",
+            "sh688783"
+          ],
+          "net_return_pct": -0.4333
+        }
+      }
+    },
+    {
+      "date": "2026-06-17",
+      "entry_date": "2026-06-18",
+      "exit_date": "2026-06-22",
+      "pool": 75,
+      "index_return_pct": 1.6821,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh688711"
+          ],
+          "net_return_pct": -1.249
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh688711",
+            "sh688603",
+            "sh600255",
+            "sh688055",
+            "sh688072"
+          ],
+          "net_return_pct": -0.0753
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh688711"
+          ],
+          "net_return_pct": -1.249
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh688711",
+            "sh601628",
+            "sh600255",
+            "sh688603",
+            "sh601939"
+          ],
+          "net_return_pct": -0.6588
+        }
+      }
+    },
+    {
+      "date": "2026-07-02",
+      "entry_date": "2026-07-03",
+      "exit_date": "2026-07-06",
+      "pool": 62,
+      "index_return_pct": 0.2456,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh688371"
+          ],
+          "net_return_pct": -11.7481
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh688371",
+            "sh688055",
+            "sh688041",
+            "sh688347",
+            "sh688630"
+          ],
+          "net_return_pct": -2.882
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh688371"
+          ],
+          "net_return_pct": -11.7481
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh688371",
+            "sh605016",
+            "sh688055",
+            "sh605296",
+            "sh688041"
+          ],
+          "net_return_pct": -4.1738
+        }
+      }
+    },
+    {
+      "date": "2026-07-16",
+      "entry_date": "2026-07-17",
+      "exit_date": "2026-07-20",
+      "pool": 75,
+      "index_return_pct": -1.7861,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603757"
+          ],
+          "net_return_pct": -13.6089
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603757",
+            "sh605296",
+            "sh603987",
+            "sh603658",
+            "sh601089"
+          ],
+          "net_return_pct": -5.1761
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh600332"
+          ],
+          "net_return_pct": -1.0095
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh600332",
+            "sh603658",
+            "sh603987",
+            "sh601811",
+            "sh605296"
+          ],
+          "net_return_pct": -1.5361
+        }
+      }
+    },
+    {
+      "date": "2026-07-30",
+      "entry_date": "2026-07-31",
+      "exit_date": "2026-08-03",
+      "pool": 92,
+      "index_return_pct": -0.6229,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603658"
+          ],
+          "net_return_pct": 2.0054
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603658",
+            "sh600332",
+            "sh600028",
+            "sh601139",
+            "sh600048"
+          ],
+          "net_return_pct": 1.1628
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh603658"
+          ],
+          "net_return_pct": 2.0054
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh603658",
+            "sh600332",
+            "sh600028",
+            "sh601860",
+            "sh601139"
+          ],
+          "net_return_pct": 1.5007
+        }
+      }
+    },
+    {
+      "date": "2026-08-13",
+      "entry_date": "2026-08-14",
+      "exit_date": "2026-08-17",
+      "pool": 98,
+      "index_return_pct": 1.3392,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603099"
+          ],
+          "net_return_pct": 0.4286
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603099",
+            "sh600257",
+            "sh600048",
+            "sh600844",
+            "sh688293"
+          ],
+          "net_return_pct": -0.447
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh603099"
+          ],
+          "net_return_pct": 0.4286
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh603099",
+            "sh603987",
+            "sh600257",
+            "sh600048",
+            "sh600056"
+          ],
+          "net_return_pct": -0.4691
+        }
+      }
+    },
+    {
+      "date": "2026-08-27",
+      "entry_date": "2026-08-28",
+      "exit_date": "2026-08-31",
+      "pool": 104,
+      "index_return_pct": 0.9129,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh601952"
+          ],
+          "net_return_pct": -0.0821
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh601952",
+            "sh600980",
+            "sh603029",
+            "sh603073",
+            "sh603908"
+          ],
+          "net_return_pct": 0.6547
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh601952"
+          ],
+          "net_return_pct": -0.0821
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh601952",
+            "sh600980",
+            "sh603029",
+            "sh603073",
+            "sh603908"
+          ],
+          "net_return_pct": 0.6547
+        }
+      }
+    },
+    {
+      "date": "2026-09-10",
+      "entry_date": "2026-09-11",
+      "exit_date": "2026-09-14",
+      "pool": 108,
+      "index_return_pct": -0.6543,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh600028"
+          ],
+          "net_return_pct": -4.7484
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh600028",
+            "sh601128",
+            "sh600362",
+            "sh605158",
+            "sh603400"
+          ],
+          "net_return_pct": -1.2413
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh601128"
+          ],
+          "net_return_pct": -0.3
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh601128",
+            "sh600028",
+            "sh601860",
+            "sh601228",
+            "sh605158"
+          ],
+          "net_return_pct": -2.0938
+        }
+      }
+    },
+    {
+      "date": "2026-09-24",
+      "entry_date": "2026-09-28",
+      "exit_date": "2026-09-29",
+      "pool": 96,
+      "index_return_pct": -1.2366,
+      "selections": {
+        "baseline_1": {
+          "symbols": [
+            "sh603099"
+          ],
+          "net_return_pct": -5.1553
+        },
+        "baseline_5": {
+          "symbols": [
+            "sh603099",
+            "sh601939",
+            "sh605268",
+            "sh688010",
+            "sh600048"
+          ],
+          "net_return_pct": -0.4788
+        },
+        "candidate_1": {
+          "symbols": [
+            "sh601939"
+          ],
+          "net_return_pct": 0.064
+        },
+        "candidate_5": {
+          "symbols": [
+            "sh601939",
+            "sh603099",
+            "sh605268",
+            "sh600048",
+            "sh600071"
+          ],
+          "net_return_pct": -0.6093
+        }
+      }
+    }
+  ],
+  "summaries": {
+    "baseline_1": {
+      "dates": 24,
+      "mean_net_return_pct": -2.0943,
+      "mean_excess_index_pct": -1.7442,
+      "worst_date_pct": -14.3687,
+      "worst_decile_mean_pct": -13.2419,
+      "synthetic_max_drawdown_pct": 46.7088,
+      "mean_atr_pct": 4.6344,
+      "mean_downside_pct": 1.6783
+    },
+    "baseline_5": {
+      "dates": 24,
+      "mean_net_return_pct": -1.0729,
+      "mean_excess_index_pct": -0.7229,
+      "worst_date_pct": -5.1761,
+      "worst_decile_mean_pct": -4.1722,
+      "synthetic_max_drawdown_pct": 23.084,
+      "mean_atr_pct": 4.5795,
+      "mean_downside_pct": 1.6717
+    },
+    "candidate_1": {
+      "dates": 24,
+      "mean_net_return_pct": -0.7063,
+      "mean_excess_index_pct": -0.3563,
+      "worst_date_pct": -11.7481,
+      "worst_decile_mean_pct": -6.8281,
+      "synthetic_max_drawdown_pct": 24.0473,
+      "mean_atr_pct": 3.2874,
+      "mean_downside_pct": 1.184
+    },
+    "candidate_5": {
+      "dates": 24,
+      "mean_net_return_pct": -0.6051,
+      "mean_excess_index_pct": -0.2551,
+      "worst_date_pct": -4.1738,
+      "worst_decile_mean_pct": -3.6811,
+      "synthetic_max_drawdown_pct": 13.821,
+      "mean_atr_pct": 3.4395,
+      "mean_downside_pct": 1.2905
+    }
+  },
+  "deployment_gate": {
+    "both_mean_and_tail_worse": {
+      "1": false,
+      "5": false
+    },
+    "risk_adjustment_permitted": true,
+    "validated_buy_model": false
+  }
+}

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import datetime as dt
+import hashlib
 from html import unescape
 from html.parser import HTMLParser
 import json
@@ -29,6 +30,12 @@ CHINA = dt.timezone(dt.timedelta(hours=8))
 SSE_PAGE = 'https://www.sse.com.cn/disclosure/listedinfo/announcement/'
 SSE_API = 'https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do'
 CCTV_PAGE = 'https://finance.cctv.com/'
+PBC_PAGE = 'https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html'
+CSRC_PAGE = 'https://www.csrc.gov.cn/'
+SSE_NEWS_PAGE = 'https://www.sse.com.cn/aboutus/mediacenter/hotandd/'
+BRIEF_SOURCES=(('中国人民银行·新闻',PBC_PAGE),('中国证监会·要闻',CSRC_PAGE),('上海证券交易所·热点动态',SSE_NEWS_PAGE))
+BRIEF_HOSTS={'www.pbc.gov.cn','www.csrc.gov.cn','www.sse.com.cn'}
+BRIEF_MAX_BYTES=2*1024*1024
 LOOKBACK_DAYS = 4
 MAX_LOOKBACK_DAYS = 31
 VERIFICATION_PROTOCOL = 'official-sources-v3-risk31-v1'
@@ -423,6 +430,167 @@ def risk_exclusions(items):
     return risks
 
 
+def _brief_get(url,base):
+    """One bounded request, exact publisher redirects and normal TLS checks."""
+    host=urllib.parse.urlsplit(base).hostname
+    url=_https(url,base,{host})
+    if urllib.parse.urlsplit(url).query:raise NewsError('brief URL must not contain a query')
+    try:
+        request=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 (compatible; HuyanResearch/2.6)','Referer':base})
+        with urllib.request.urlopen(request,timeout=6) as response:
+            _https(response.geturl(),base,{host});data=response.read(BRIEF_MAX_BYTES+1)
+        if len(data)>BRIEF_MAX_BYTES:raise NewsError('brief source exceeded response limit')
+        return data.decode('utf-8-sig')
+    except (OSError,urllib.error.URLError,UnicodeError) as exc:
+        code='HTTP '+str(exc.code) if isinstance(exc,urllib.error.HTTPError) else type(getattr(exc,'reason',exc)).__name__
+        raise NewsError('official headline source request failed ('+code+')') from exc
+
+
+class _HeadlineRows(HTMLParser):
+    """Keep link/date associations inside official list rows, never the page date."""
+    def __init__(self):super().__init__(convert_charrefs=True);self.stack=[];self.rows=[]
+    def handle_starttag(self,tag,attrs):
+        if tag in ('li','tr','dd'):self.stack.append({'tag':tag,'text':[],'links':[],'active':None})
+        if tag=='a' and self.stack:
+            attrs=dict(attrs);self.stack[-1]['active']=[attrs.get('href',''),[],attrs.get('title','')]
+    def handle_data(self,value):
+        for row in self.stack:row['text'].append(value)
+        if self.stack and self.stack[-1]['active'] is not None:self.stack[-1]['active'][1].append(value)
+    def handle_endtag(self,tag):
+        if tag=='a' and self.stack and self.stack[-1]['active'] is not None:
+            link=self.stack[-1]['active'];self.stack[-1]['links'].append((link[0],link[2] or ''.join(link[1]).strip()));self.stack[-1]['active']=None
+        if self.stack and tag==self.stack[-1]['tag']:
+            self.rows.append(self.stack.pop())
+
+
+def parse_official_headlines(html,source,url,moment,window_start=None):
+    """Parse PBC/SSE's dated first-page rows; retain only date precision."""
+    parser=_HeadlineRows();parser.feed(html);items=[];dated=0
+    for row in parser.rows:
+        found=re.search(r'(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)',' '.join(row['text']))
+        if not found:continue
+        dated+=1
+        stamp,_=_dated(found[1],moment,window_start)
+        for href,title in row['links']:
+            try:link=_https(href,url,{urllib.parse.urlsplit(url).hostname})
+            except NewsError:continue
+            path=urllib.parse.urlsplit(link).path
+            if not title or not re.search(r'(?:/c_\d{8}_\d+\.shtml|/\d+/index\.html|/\d+\.html)$',path):continue
+            if stamp:items.append({'title':title[:250],'url':link,'published_at':stamp,'published_precision':'date',
+                'source':source,'kind':'market_news','source_url':url,'verification':'官方目录标题及披露日期；未核验正文'})
+    if not dated:raise NewsError('official first-page headline/date format was not recognized')
+    return list({item['url']:item for item in items}.values())[:32]
+
+
+def _csrc_headlines(moment,start):
+    # The current official list is JS-driven; the homepage's c100028 links are
+    # public, but its MM-DD labels do not establish a year. Read the article's
+    # declared publication date, at most four articles, without interpreting body.
+    parser=_Links();parser.feed(_brief_get(CSRC_PAGE,CSRC_PAGE));links={}
+    for href,title in parser.links:
+        try:url=_https(href,CSRC_PAGE,{'www.csrc.gov.cn'})
+        except NewsError:continue
+        if title and re.fullmatch(r'/csrc/c100028/c\d+/content\.shtml',urllib.parse.urlsplit(url).path):links[url]=title
+    if not links:raise NewsError('CSRC current homepage headline links were not recognized')
+    def article(pair):
+        url,title=pair;html=_brief_get(url,CSRC_PAGE)
+        text=unescape(re.sub(r'<[^>]+>',' ',html))
+        found=re.search(r'日期\s*[：:]\s*(\d{4}-\d{2}-\d{2})',text)
+        if not found:raise NewsError('CSRC article declared publication date missing')
+        stamp,_=_dated(found[1],moment,start)
+        return {'title':title[:250],'url':url,'published_at':stamp,'published_precision':'date','source':'中国证监会·要闻',
+            'kind':'market_news','source_url':CSRC_PAGE,'verification':'官方文章标题与明示发布日期；未分析正文'} if stamp else None
+    with ThreadPoolExecutor(max_workers=4) as pool:items=list(pool.map(article,list(links.items())[:4]))
+    return [item for item in items if item]
+
+
+def _brief_sources(moment,start,*,fixed_observed=None,allow_late=False):
+    actual=fixed_observed or _moment()
+    if not allow_late and not _window(actual):
+        return [],[{'source':name,'url':url,'status':'error','collected_at':actual.isoformat(),'count':0,
+            'error':'盘前窗口已结束，未追加来源请求','scope':'未请求，未声称已读'} for name,url in BRIEF_SOURCES]
+    def source(spec):
+        name,url=spec
+        try:
+            items=_csrc_headlines(moment,start) if url==CSRC_PAGE else parse_official_headlines(_brief_get(url,url),name,url,moment,start)
+            observed=fixed_observed or _moment()
+            return [dict(item,observed_at=observed.isoformat()) for item in items],{'source':name,'url':url,'status':'complete',
+                'collected_at':observed.isoformat(),'count':len(items),'error':'',
+                'scope':start+'至'+moment.date().isoformat()+'公开首屏有界标题取样；央行/上交所最多32条，证监会最多4条文章日期元数据；未声称全站或全文覆盖'}
+        except NewsError as exc:
+            observed=fixed_observed or _moment()
+            return [],{'source':name,'url':url,'status':'error','collected_at':observed.isoformat(),'count':0,'error':str(exc),
+                'scope':'本次官方首屏取样失败，不代表没有消息'}
+    with ThreadPoolExecutor(max_workers=3) as pool:results=list(pool.map(source,BRIEF_SOURCES))
+    return [item for items,_ in results for item in items],[coverage for _,coverage in results]
+
+
+def collect_brief_only(now=None,*,coverage_start=None):
+    """Late-safe context only: never creates a morning risk-verification receipt."""
+    moment=_moment(now);start=_coverage_start(moment,coverage_start).isoformat()
+    items,coverage=_brief_sources(moment,start,fixed_observed=moment if now is not None else None,allow_late=True)
+    try:
+        links=parse_cctv_links(_brief_get(CCTV_PAGE,CCTV_PAGE),moment,start)[:4]
+        def article(pair):
+            url,title=pair
+            return parse_cctv_article(_brief_get(url,CCTV_PAGE),url,title,moment,start)
+        with ThreadPoolExecutor(max_workers=4) as pool:accepted=[item for item in pool.map(article,links) if item]
+        observed=moment if now is not None else _moment()
+        items.extend(dict(item,observed_at=observed.isoformat()) for item in accepted)
+        coverage.append({'source':'央视网财经','url':CCTV_PAGE,'status':'complete' if links else 'partial',
+            'collected_at':observed.isoformat(),'count':len(accepted),'error':'' if links else '首页没有可解析的近期文章',
+            'scope':'财经首页最多4条文章的标题与发布时间元数据，不是全部新闻或正文核验'})
+    except NewsError as exc:
+        observed=moment if now is not None else _moment()
+        coverage.append({'source':'央视网财经','url':CCTV_PAGE,'status':'error','collected_at':observed.isoformat(),
+            'count':0,'error':str(exc),'scope':'本次有界采样失败，未声称已读'})
+    finished=moment if now is not None else _moment()
+    value=market_brief(items,coverage,finished)
+    if not _window(finished):value['warnings'].append('本次为实际晚到消息更新，不是08点采集或09点准时发布证明，不授权新买入。')
+    return value
+
+
+def market_brief(items,coverage,moment):
+    """Fixed title-topic importance, never sentiment, returns or beneficiary stocks."""
+    rules=[('货币政策',r'货币政策|降准|降息|利率|流动性|逆回购|金融统计','macro'),
+           ('监管规则',r'监管|指导意见|实施规则|征求意见|行政处罚|资本市场','policy'),
+           ('宏观经济',r'经济|GDP|CPI|PPI|消费|出口|财政|就业','macro'),
+           ('市场机制',r'ETF|融资|交易|证券|上市|中长期资金','market'),
+           ('风险提示',r'风险提示|风险警示|停牌|立案|退市|逾期','risk'),
+           ('产业动态',r'科技|半导体|人工智能|能源|制造','general')]
+    unique={};cutoff=moment-dt.timedelta(hours=20)
+    for item in items:
+        title=re.sub(r'\s+',' ',str(item.get('title',''))).strip()
+        if not title or not item.get('published_at') or not item.get('observed_at'):continue
+        topics=[(name,impact) for name,pattern,impact in rules if re.search(pattern,title)]
+        precision='day' if item.get('published_precision') in ('date','day') else item.get('published_precision','second')
+        published=item['published_at'];stamp=dt.datetime.combine(dt.date.fromisoformat(published),dt.time(),CHINA) if precision=='day' else dt.datetime.fromisoformat(published)
+        recent=stamp>=cutoff or precision=='day' and published>=cutoff.date().isoformat()
+        key=re.sub(r'[\s，。！？：:、《》“”]','',title)
+        row={'id':hashlib.sha256(item['url'].encode()).hexdigest()[:20],'title':title[:250],'url':item['url'],
+            'source':item['source'],'published_at':published,'published_precision':precision,'collected_at':item['observed_at'],
+            'importance':'high' if topics else 'normal','topics':[name for name,_ in topics[:4]],
+            'importance_reason':('标题涉及'+'、'.join(name for name,_ in topics[:3])+'，值得核对原文。') if topics else '官方近期财经标题，供背景阅读。',
+            'impact':topics[0][1] if topics else 'general','scope':item.get('verification','官方目录标题，未核验正文'),
+            '_recent':recent,'_issuer':item.get('kind')=='announcement'}
+        if key not in unique or (row['_recent'],published)>(unique[key]['_recent'],unique[key]['published_at']):unique[key]=row
+    ordered=sorted(unique.values(),key=lambda row:(row['_recent'],row['importance']=='high',row['published_at']),reverse=True)
+    selected=[];issuers=0
+    for row in ordered:
+        if row['_issuer'] and issuers>=2:continue
+        issuers+=int(row['_issuer']);selected.append({k:v for k,v in row.items() if not k.startswith('_')})
+        if len(selected)==8:break
+    failures=[source for source in coverage if source['status']!='complete']
+    warnings=['仅按官方标题和固定主题规则选取，重要性不是利好/利空评分，不推断受益股、涨跌或未来收益。',
+              '优先隔夜及当日已发布消息；不足时保留窗口内较早背景，日期精度不会伪造为具体时分。']
+    if failures:warnings.append('部分官方来源获取或解析失败，请展开来源覆盖；未声称全部消息已读。')
+    if len(selected)<5:warnings.append('本次已核验标题少于5条，按真实数量展示，不补造新闻。')
+    return {'protocol':'market-brief-v1','date':moment.date().isoformat(),'generated_at':moment.isoformat(),
+        'status':'partial' if failures and selected else 'complete' if selected else 'unavailable','items':selected,
+        'coverage':coverage[:8],'warnings':warnings,'late':not _window(moment),
+        'scope':'有限官方来源标题与发布时间汇总；未阅读全文，不代表全部消息或收益预测。'}
+
+
 def collect(now=None, *, coverage_start=None):
     """Return a daily_plan-compatible morning_news document, without writing KV."""
     moment = _moment(now)
@@ -463,6 +631,10 @@ def collect(now=None, *, coverage_start=None):
             'window_end': moment.date().isoformat(), 'lookback_days': RISK_LOOKBACK_DAYS,
             'semantics': RISK_SEMANTICS, 'error': str(exc)}
         record['errors'].append('上交所31天风险研究观察窗口：' + str(exc))
+    # Independent broad context does not relax or alter the strict SSE risk
+    # coverage above. Each added source has one six-second request per page,
+    # at most four CSRC date pages, and only three concurrent publishers.
+    broad_items,broad_coverage=_brief_sources(moment,start,fixed_observed=moment if now is not None else None)
     # In production use completion time; passing now is an explicit deterministic
     # replay/testing boundary, never a fabricated successful earlier timestamp.
     finished = _moment() if now is None else moment
@@ -482,6 +654,11 @@ def collect(now=None, *, coverage_start=None):
     record['items'] = sorted(market + announcements[:max(0, MAX_ITEMS - len(market))], key=lambda item: item['published_at'], reverse=True)
     record['items_scanned'] = len(all_items)
     record['items_displayed'] = len(record['items'])
+    coverage=[{'source':source['source'],'url':source['url'],'status':'complete' if source['status']=='complete' else 'error',
+        'collected_at':source.get('observed_at',finished.isoformat()),'count':source.get('accepted_items',0),
+        'error':source.get('error',''),'scope':source.get('scope','固定官方公告来源目录核验，未阅读全部正文')}
+        for source in record['sources']]
+    record['market_brief']=market_brief(all_items+broad_items,coverage+broad_coverage,finished)
     if not record['errors'] and record['items']:
         record['status'] = 'verified'
     return record

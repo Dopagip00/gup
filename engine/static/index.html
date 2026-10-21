@@ -25,22 +25,33 @@
     <header class="topbar"><div class="breadcrumb">研究终端 <span>/</span> <strong id="view-name">短线机会</strong></div><div class="topbar-right"><span class="market-status" id="market-status">连接中</span><time id="clock"></time></div></header>
     <div id="toast" class="toast" role="status" hidden></div>
     <div class="page-content">
-      <div id="global-alert" class="alert" role="alert" hidden></div>
+      <details id="global-alert-wrap" class="data-notice" hidden><summary id="global-alert-summary">数据提醒</summary><div id="global-alert" class="alert" role="alert" hidden></div></details>
       <section id="view-overview" class="view">
-        <div class="page-heading"><div><div class="eyebrow">DAILY MARKET INTELLIGENCE</div><h1>短线机会</h1><p>每天研究新机会，下一交易日独立跟踪前日建议；交易由你操作。</p></div><div class="heading-actions"><label class="date-picker"><span>行情日期</span><input type="date" id="history-date" aria-label="查看已生成的行情日期"></label><button class="button light small" id="today-btn">最新</button><button class="button primary" id="refresh-btn"><span aria-hidden="true">↻</span> 更新研究</button></div></div>
-        <p class="fine-print" id="research-dates" role="status">行情日期与公开快照更新时间分别核验中。</p>
-        <div class="method-note"><span class="note-symbol">i</span><span><strong>预计涨幅是模型估计，误差与区间同样重要。</strong> 默认研究买入日开盘 → 下一交易日收盘的收益近似。逐笔 D1 为建议买入日，D2 为下一交易日卖出参考日；每日新建议与前日跟踪独立，遵守 T+1，节假日顺延。</span><button id="method-btn" class="text-button">策略说明 ↗</button></div>
+        <div class="page-heading"><div><div class="eyebrow">DAILY OBSERVATION</div><h1>今日优选</h1></div><div class="heading-actions"><label class="date-picker"><span>历史日期</span><input type="date" id="history-date" aria-label="选择真实历史研究日期"></label><button class="button light small" id="today-btn">今日</button><button class="button primary" id="refresh-btn"><span aria-hidden="true">↻</span> 更新研究</button></div></div>
+        <div class="recommendation-day" aria-live="polite"><div><span id="recommendation-date-label">今日观察 · 北京时间</span><strong id="recommendation-date">正在核对日期</strong></div><p id="recommendation-status">今日名单待更新</p></div>
+        <p class="source-line" id="research-dates" role="status">正在核对最近完整收盘与更新时间。</p>
+        <div class="important-note"><strong>重要提示</strong><span>观察名单未通过正式买入验证，分数不是上涨概率；交易由你决定。</span></div>
+        <article class="panel market-brief-panel" id="market-brief-panel" aria-live="polite">
+          <div class="panel-header"><h2>早间重要消息</h2><span class="pill neutral" id="market-brief-status">读取中</span></div>
+          <p class="source-line" id="market-brief-date">正在核对信息日期</p>
+          <div id="market-brief-items" class="market-brief-items"></div>
+          <p id="market-brief-empty" class="brief-empty">正在读取公开来源</p>
+          <p id="market-brief-gap" class="data-gap" hidden></p>
+          <details id="market-brief-more" class="compact-details" hidden><summary>更多消息与来源记录</summary><div id="market-brief-extra" class="market-brief-items"></div><p id="market-brief-warnings" class="source-line"></p></details>
+        </article>
         <article class="panel ranking-panel" id="daily-watchlist-panel">
-          <div class="panel-header"><div><div class="eyebrow">DAILY OBSERVATION</div><h2 id="watchlist-title">今日优选观察榜</h2><p>每天 09:00 计划发布，优先研究下列股票；相对分不是上涨概率，观察名单不等于已验证买入。</p></div><button class="button light small" id="watchlist-refresh">重新读取观察榜</button></div>
-          <p class="quote-status" id="watchlist-dates">正在核对榜单所属日期、前收盘依据与实际发布时间。</p>
-          <div class="alert" id="watchlist-alert" role="status" hidden></div>
+          <div class="panel-header"><h2 id="watchlist-title">今日优选观察榜</h2><button class="button light small" id="watchlist-refresh">重新读取</button></div>
+          <p class="source-line" id="watchlist-timing">正在核对榜单生成时间</p>
+          <p class="data-gap" id="watchlist-gap" role="status" hidden></p>
           <div class="top-pick" id="watch-priority-card">
-            <div class="pick-intro"><div class="pick-kicker" id="watch-priority-label">今日最优先观察</div><h2 id="watch-priority-name">正在读取观察榜</h2><p id="watch-priority-reason">正式买入资格另按模型、行情、公告和风险核验，不因进入观察榜而放宽。</p><div class="pick-tags"><span>仅观察 · 非买入信号</span><span>不提供未经验证的买卖价位</span></div></div>
-            <div class="pick-metrics" id="watch-priority-metrics" hidden><div class="pick-return"><span>本榜相对分 · 非概率</span><strong id="watch-priority-score">—</strong><small>仅用于观察排序，不代表预期收益</small></div><div class="pick-entry"><span>核验记录</span><strong>未通过正式买入验证</strong><small id="watch-priority-verification">公告与 AI 完整性待核验</small></div></div>
+            <div class="pick-intro"><div class="pick-kicker" id="watch-priority-label">今日最优先观察</div><h2 id="watch-priority-name">正在读取观察榜</h2><p id="watch-priority-reason">等待真实榜单</p><div class="pick-tags"><span>仅观察 · 非买入信号</span></div></div>
+            <div class="pick-metrics" id="watch-priority-metrics" hidden><div class="pick-return"><span>本榜相对分</span><strong id="watch-priority-score">—</strong></div><details class="pick-entry"><summary>查看核验记录</summary><small id="watch-priority-verification">公告与 AI 完整性待核验</small></details></div>
           </div>
           <div class="table-scroll"><table class="stock-table"><thead><tr><th>观察次序</th><th>股票 / 代码</th><th>本榜相对分 / 构成</th><th>优先研究依据</th><th>风险与待核验事项</th></tr></thead><tbody id="watchlist-body"></tbody></table><div class="empty-state" id="watchlist-empty"><span class="empty-icon">◇</span><strong>正在读取当日观察名单</strong><p>数据不足或触及硬风险时保留空榜，不为凑数放行。</p></div></div>
-          <div class="table-footer"><span id="watchlist-summary">最多展示 5 只，第一名为最优先观察；正式买入验证另列于下方。</span><span id="watchlist-verification">公告与 AI 未完成核验，不能视为安全。</span></div>
+          <div class="table-footer"><span id="watchlist-summary">最多展示 5 只</span></div>
+          <details class="compact-details" id="watchlist-details"><summary>核验与方法 <span id="watchlist-warning-count"></span></summary><p id="watchlist-dates">正在核对真实时刻</p><div class="alert" id="watchlist-alert" role="status" hidden></div><p id="watchlist-verification">公告与 AI 完整性待核验。</p><p>固定比较技术规则与已披露财务；原始排名揭榜后不递补。正式买入须另行通过模型和风险验证，价格研究采用买入日开盘至下一交易日收盘。</p><button id="method-btn" class="text-button">完整策略说明 ↗</button></details>
         </article>
+        <details class="market-research-details" id="market-research-details"><summary>市场数据与正式买入验证</summary>
         <article class="top-pick" id="top-pick">
           <div class="pick-intro"><div class="pick-kicker"><span class="pick-dot"></span> 通过全部验证的买入首选 <span id="pick-date"></span></div><h2 id="pick-name">暂无经过验证的首选</h2><p id="pick-thesis">等待有效行情与预测验证。满足全部条件后，仅突出综合排名最高的一只。</p><div class="pick-tags"><span id="pick-horizon">两交易日周期</span><span>排除权重指标股</span><span>遵守 T+1</span></div></div>
           <div class="pick-metrics" id="pick-metrics" hidden><div class="pick-return"><span>预计涨幅</span><strong id="pick-return">—</strong><small id="pick-interval">估计区间 —</small></div><div class="pick-entry"><span>观察买入区间</span><strong id="pick-entry">—</strong><small id="pick-validation">验证信息 —</small></div></div>
@@ -57,6 +68,7 @@
           <article class="panel daily-brief"><div class="panel-header"><div><div class="eyebrow">RESEARCH BRIEF</div><h2>今日研究摘要</h2></div><span class="small-square">↗</span></div><div class="brief-status" id="brief-status">数据准备中</div><ul id="brief-reasons" class="brief-list"><li>数据更新后将生成真实行情研究与每日计划。</li></ul><div class="brief-footer"><span>数据时点</span><strong id="data-date">—</strong><span>下次计划更新</span><strong id="next-run">—</strong></div></article>
         </div>
         <div class="quote-status" id="quote-status">盘中延时报价：等待连接。研究排名使用最近完整交易日数据。</div><article class="panel ranking-panel"><div class="panel-header ranking-heading"><div><h2><span id="ranking-title">验证合格短线候选</span> <span class="pill neutral" id="stock-count">0 只</span></h2><p id="ranking-basis">买入日开盘 → 下一交易日收盘（研究近似）。默认仅展示验证合格候选；技术规则分不是推荐值或上涨概率。</p></div><a class="button light small" href="/api/export.csv" id="export-btn">↓ 导出 CSV</a></div><div class="table-controls"><div class="search-field"><span aria-hidden="true">⌕</span><input id="stock-search" placeholder="搜索股票名称或代码" aria-label="搜索股票"></div><label class="filter-select">最低技术分 <select id="min-score"><option value="0">全部</option><option value="50">50</option><option value="60">60</option><option value="70">70</option><option value="80">80</option></select></label><label class="switch-label"><input type="checkbox" id="show-unqualified"><span>展开未通过研究（非推荐）</span></label><label class="switch-label"><input type="checkbox" id="show-excluded"><span>含权重参考股</span></label><label class="filter-select sort-filter">排序 <select id="stock-sort"><option value="prediction">研究综合值</option><option value="expected">预计涨幅由高到低</option><option value="score">技术规则分由高到低</option><option value="change">涨跌幅由高到低</option><option value="symbol">代码顺序</option></select></label></div><div class="table-scroll"><table class="stock-table"><thead><tr><th>股票 / 代码</th><th>收盘价 / 涨跌幅</th><th id="prediction-horizon-header">两交易日预期 / 区间</th><th>验证误差 / 样本</th><th>技术规则分 <span title="0–100 分，只表示技术规则匹配程度，不是推荐值或上涨概率">ⓘ</span></th><th>策略状态</th><th>观察买入区间</th><th>止损参考</th><th>止盈参考</th><th></th></tr></thead><tbody id="stocks-body"></tbody></table><div class="empty-state" id="stocks-empty"><span class="empty-icon">◫</span><strong>正在加载研究数据</strong><p>公开网站由云端更新，不依赖你的电脑开机；加载失败可重新读取快照。</p></div></div><div class="table-footer"><span id="table-summary">每个交易日生成并保留研究档案</span><button class="text-button" id="show-more" hidden>显示更多 ↓</button><span>仅供研究 · 用户自行操作</span></div></article>
+        </details>
       </section>
       <section id="view-longterm" class="view" hidden>
         <div class="page-heading"><div><div class="eyebrow">LONG-TERM FUNDAMENTALS</div><h1>长线价值</h1><p>从盈利质量、增长与估值观察企业，独立于短线价格信号。</p></div><button class="button light" id="longterm-refresh">刷新研究</button></div>

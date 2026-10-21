@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import math
 import re
+from statistics import mean, median
 from urllib.parse import urlsplit
 
 import core
@@ -20,6 +21,7 @@ import market_data as md
 PROTOCOL = 'daily-observation-v1'
 KEY_PREFIX = 'daily_watchlist:'
 TECHNICAL_WEIGHT, FINANCIAL_WEIGHT = .60, .40
+RANKING_POLICY = 'risk-aware-observation-v2'
 SYMBOL = re.compile(r'sh(?:60[0135]|68[89])\d{3}')
 PRICE_FIELDS = ('entry_low', 'entry_high', 'stop_loss', 'take_profit', 'max_position_pct')
 
@@ -60,7 +62,8 @@ def _base(day, moment):
             'publication_timing': timing, 'late': timing == 'late', 'status': 'insufficient_data',
             'model_validated': False, 'actionable': False, 'eligible': False, 'items': [], 'top_pick': None,
             'alerts': [], 'withdrawn_symbols': [], 'coverage': {}, 'verification': {}, 'warnings': [],
-            'method': '完整同日财务证据池优先；固定60%技术规则分+40%已披露财务分，缺财务仅计60%技术分。并列按较低ATR占比、证券代码排序；不使用未验证模型的预期涨幅。',
+            'ranking_policy': RANKING_POLICY,
+            'method': '证据顺序为完整同日财务、历史已披露质量、财务缺失；固定60%风险调整技术分+40%财务分。质量分不用旧PE/PB或旧总分；技术扣分仅用截止日前60日下行波动/回撤、ATR和20日流动性代理。未验证收益优势，不使用失败模型的预期涨幅。',
             'scope': '仅供比较的优选观察榜，未通过短线模型验证，不提供入场、止损、止盈或仓位指令；排名不是上涨概率或收益保证。'}
 
 
@@ -160,6 +163,77 @@ def _financial(record, snapshot, target, moment):
         return report <= published <= _day(target) and report <= updated <= _day(target)
     except (TypeError, ValueError):
         return False
+
+
+def _disclosed_quality(record, snapshot, target, moment):
+    """Reuse disclosed operating facts, never stale valuation or total score."""
+    if not isinstance(record, dict) or not isinstance(snapshot, dict):
+        return None
+    try:
+        day, original = _day(target), _day(snapshot.get('as_of'))
+        fetched = _instant(snapshot.get('fetched_at'))
+        if (record.get('date') != original.isoformat() or record.get('quote_date') != original.isoformat()
+                or original > day or not fetched or fetched > moment or fetched.date() < original):
+            return None
+        report, published, updated = [_day(record.get(key)) for key in ('report_date','publication_date','provider_update_date')]
+        annual, annual_published = [_day(record.get(key)) for key in ('roe_report_date','roe_publication_date')]
+        if (not report <= published <= original <= day or not report <= updated <= original
+                or not annual <= annual_published <= original or not annual.isoformat().endswith('12-31')
+                or (day-report).days>200):
+            return None
+    except (TypeError, ValueError):
+        return None
+    fields=('roe','revenue_growth','profit_growth','operating_cash_to_profit','recurring_profit_ratio','debt_ratio','ttm_parent_netprofit_100m')
+    if any(not _number(record.get(key)) for key in fields) or record['ttm_parent_netprofit_100m']<=0 or not 0<=record['debt_ratio']<=100:
+        return None
+    quality=max(0,min(15,record['roe']))+max(0,min(10,record['operating_cash_to_profit']*10))
+    quality+=10 if record['recurring_profit_ratio']>=.8 else 6 if record['recurring_profit_ratio']>=.6 else 0
+    growth=max(0,min(15,record['revenue_growth']*.75))+max(0,min(15,record['profit_growth']*.5))
+    # Retain a provider-derived low-base warning instead of extrapolating its growth.
+    risks=record.get('risks') if isinstance(record.get('risks'),list) else []
+    if any('低基数' in str(value) or '同期利润基数为零或亏损' in str(value) for value in risks):
+        growth=min(growth,10)
+    penalty=5 if record['debt_ratio']>=65 else 0
+    return round(max(0,min(100,(quality+growth-penalty)/65*100)),3)
+
+
+def _risk_penalty(atr, downside, drawdown, liquidity, regime):
+    multiplier=1.5 if regime=='defensive' else 1.0
+    return round(min(30,2*atr+3*downside*multiplier+.25*drawdown+10*(1-min(1,liquidity/20_000_000))),3)
+
+
+def _risk_profile(bars, benchmark, target):
+    """Fixed backward-only risk budget; no fitted return parameters."""
+    def window(rows):
+        if not isinstance(rows,list):return None
+        selected=[row for row in rows if isinstance(row,dict) and isinstance(row.get('date'),str) and row['date']<=target]
+        dates=[row['date'] for row in selected]
+        if dates!=sorted(set(dates)) or len(selected)<61 or dates[-1]!=target:return None
+        try:
+            for day in dates:_day(day)
+        except (TypeError,ValueError):return None
+        return selected[-61:]
+    rows, index=window(bars),window(benchmark)
+    if rows is None or index is None or [row['date'] for row in rows]!=[row['date'] for row in index]:return None
+    for row in [*rows,*index]:
+        if any(not _number(row.get(key),positive=True) for key in ('open','high','low','close')) or not row['low']<=min(row['open'],row['close'])<=max(row['open'],row['close'])<=row['high']:
+            return None
+    if any(not _number(row.get('volume'),positive=True) or not _number(row.get('raw_close'),positive=True) for row in rows[-20:]):return None
+    returns=[(right['close']/left['close']-1)*100 for left,right in zip(rows,rows[1:])]
+    downside=math.sqrt(mean(min(0,value)**2 for value in returns))
+    peak=rows[0]['close'];drawdown=0
+    for row in rows:
+        peak=max(peak,row['close']);drawdown=max(drawdown,(1-row['close']/peak)*100)
+    ranges=[max(row['high']-row['low'],abs(row['high']-previous['close']),abs(row['low']-previous['close'])) for previous,row in zip(rows,rows[1:])]
+    atr=mean(ranges[-14:])/rows[-1]['close']*100
+    liquidity=median(row['raw_close']*row['volume']*100 for row in rows[-20:])
+    regime='defensive' if index[-1]['close']<mean(row['close'] for row in index[-60:]) and index[-1]['close']<index[-21]['close'] else 'normal'
+    atr,downside,drawdown,liquidity=[round(value,3) for value in (atr,downside,drawdown,liquidity)]
+    return {'atr_pct':atr,'downside_deviation_60d_pct':downside,'max_drawdown_60d_pct':drawdown,
+            'liquidity_proxy_20d_cny':liquidity,'market_regime':regime,
+            'risk_penalty':_risk_penalty(atr,downside,drawdown,liquidity,regime),
+            'window_start':rows[0]['date'],'window_end':target,'return_samples':60,
+            'reference_close':rows[-1]['close'],'reference_raw_close':rows[-1]['raw_close']}
 
 
 def observation_quote_evidence(stock, quote, snapshot, target, moment, *, observation_only=False, defer_auction=False):
@@ -296,6 +370,10 @@ def build(date=None, service=None, now=None, limit=5):
         finance_rows[symbol] = item
     for symbol in repeated_financial:
         finance_rows.pop(symbol, None)
+    try:
+        benchmark = core.load_history('sh000001').get('bars')
+    except Exception:
+        benchmark = None
     ai = core.getkv('ai_review', {})
     review = ai.get('review', {}) if isinstance(ai, dict) else {}
     reviewed = review.get('reviewed_symbols', []) if isinstance(review, dict) else []
@@ -346,53 +424,84 @@ def build(date=None, service=None, now=None, limit=5):
             exclude('technical_evidence_missing'); continue
         record = finance_rows.get(symbol, {})
         complete = quote_evidence['quote_basis'] == 'same_session_raw_close' and _financial(record, financial, target, moment)
-        score = TECHNICAL_WEIGHT * stock['score'] + (FINANCIAL_WEIGHT * record['score'] if complete else 0)
-        atr = stock['atr14'] / stock['close'] * 100
+        quality = _disclosed_quality(record, financial, target, moment) if not complete else None
+        financial_score = record['score'] if complete else quality
+        financial_basis = ('same_session_complete' if complete else
+                           'cached_disclosed_quality_without_valuation' if quality is not None else 'missing')
+        try:
+            profile = _risk_profile(core.load_history(symbol).get('bars'), benchmark, target)
+        except Exception:
+            profile = None
+        if (profile is None or abs(profile['reference_close']-stock['close'])>.0001
+                or abs(profile['reference_raw_close']-stock['raw_close'])>.0001):
+            exclude('risk_history_missing'); continue
+        technical = round(max(0, stock['score'] - profile['risk_penalty']), 3)
+        score = TECHNICAL_WEIGHT * technical + (FINANCIAL_WEIGHT * financial_score if financial_score is not None else 0)
         risk_reasons = risk.get('reasons') if isinstance(risk.get('reasons'), list) else []
         risk_notes = [str(item.get('detail'))[:300] for item in risk_reasons if isinstance(item, dict) and item.get('detail')]
         risk_notes.append('短线模型验证未作为本观察榜的合格买入依据；相对分数不是预期收益或上涨概率。')
+        risk_notes.append('固定风险预算未经盈利验证；20日流动性为原价收盘×成交手数×100的代理，不等于真实可成交金额或盘口深度。')
         if quote_evidence['quote_basis'] == 'next_session_previous_close':
-            risk_notes.append('盘中迟到观察恢复：今日报价的昨收仅佐证上一交易日原价收盘，不是该日同日估值；财务部分按缺失处理。')
-        if not complete:
+            risk_notes.append('盘中迟到观察恢复：今日报价的昨收仅佐证上一交易日原价收盘，不是该日同日估值；旧PE/PB不会改标此前日期。')
+        if quality is not None:
+            risk_notes.append(f"历史已披露经营质量截至{financial['as_of']}，重新计算质量/增长/现金流/杠杆分，不使用旧PE/PB或旧总分；当前估值待核验。")
+        elif not complete:
             risk_notes.append('同日完整财务证据不足，仅计技术部分，不填补财务分；置信度较低。')
         elif record.get('eligible') is not True:
             financial_risks = record.get('risks') if isinstance(record.get('risks'), list) else []
             risk_notes.append('财务证据完整与长线筛选合格不同；该股未通过原长线筛选。')
             risk_notes.extend(str(value)[:300] for value in financial_risks[:12])
             risk_notes.append(f"年度ROE{record['roe']:.2f}%，资产负债率{record['debt_ratio']:.2f}%；营收/归母净利同比{record['revenue_growth']:+.2f}%/{record['profit_growth']:+.2f}%。")
-        reasons = [f"技术规则分{stock['score']:.1f}；近5日{metrics['return_5d_pct']:+.2f}%，偏离MA20{metrics['ma20_deviation_pct']:+.2f}%。"]
+        reasons = [f"原技术分{stock['score']:.1f}，固定风险扣分{profile['risk_penalty']:.2f}后{technical:.2f}；近5日{metrics['return_5d_pct']:+.2f}%，偏离MA20{metrics['ma20_deviation_pct']:+.2f}%。",
+                   f"60日下行波动{profile['downside_deviation_60d_pct']:.2f}%，最大回撤{profile['max_drawdown_60d_pct']:.2f}%；市场状态{'防御' if profile['market_regime']=='defensive' else '正常'}。"]
         if complete:
             reasons.append(f"已披露财务分{record['score']:.1f}；PE(TTM){record['pe_ttm']:.2f}，ROE{record['roe']:.2f}%。")
             reasons.append(f"营收/归母净利同比{record['revenue_growth']:+.2f}%/{record['profit_growth']:+.2f}%，经营现金流/净利{record['operating_cash_to_profit']:.2f}。")
+        elif quality is not None:
+            reasons.append(f"已披露质量分{quality:.1f}；年度ROE{record['roe']:.2f}%，经营现金流/净利{record['operating_cash_to_profit']:.2f}，资产负债率{record['debt_ratio']:.2f}%；估值待核验。")
+            financial_risks = record.get('risks') if isinstance(record.get('risks'), list) else []
+            risk_notes.extend(str(value)[:300] for value in financial_risks[:12])
         per_verification = dict(verification, **quote_evidence, price_history_complete=True,
                                 chase_passed=True, financial_complete=complete,
-                                financial_data_date=target if complete else None,
-                                financial_report_date=record.get('report_date') if complete else None,
-                                financial_publication_date=record.get('publication_date') if complete else None,
+                                financial_quality_available=financial_score is not None,
+                                financial_evidence_basis=financial_basis,
+                                financial_data_date=financial.get('as_of') if financial_score is not None else None,
+                                financial_valuation_date=target if complete else None,
+                                financial_report_date=record.get('report_date') if financial_score is not None else None,
+                                financial_publication_date=record.get('publication_date') if financial_score is not None else None,
+                                financial_provider_update_date=record.get('provider_update_date') if financial_score is not None else None,
+                                financial_roe_report_date=record.get('roe_report_date') if financial_score is not None else None,
+                                financial_roe_publication_date=record.get('roe_publication_date') if financial_score is not None else None,
+                                risk_window_start=profile['window_start'], risk_window_end=target, risk_return_samples=60,
                                 model_validation_status='not_validated')
         per_verification['ai_reviewed'] = verification['ai_status'] == 'reviewed' and symbol in reviewed
         per_verification['ai_status'] = 'reviewed' if per_verification['ai_reviewed'] else 'unverified'
         item = {'symbol': symbol, 'name': name, 'asof': target, 'score': round(score, 3),
-                'components': {'technical': stock['score'], 'financial': record['score'] if complete else None,
+                'components': {'technical': technical, 'technical_raw': stock['score'],
+                               'financial': financial_score, 'risk_penalty': profile['risk_penalty'],
                                'weights': {'technical': TECHNICAL_WEIGHT, 'financial': FINANCIAL_WEIGHT},
-                               'atr_pct': round(atr, 3), 'return_5d_pct': metrics['return_5d_pct'],
+                               **{key: profile[key] for key in ('atr_pct','downside_deviation_60d_pct','max_drawdown_60d_pct','liquidity_proxy_20d_cny','market_regime')},
+                               'return_5d_pct': metrics['return_5d_pct'],
                                'ma20_deviation_pct': metrics['ma20_deviation_pct']},
                 'reasons': reasons, 'risk_notes': list(dict.fromkeys(risk_notes)), 'verification': per_verification,
                 'model_validated': False, 'actionable': False, 'eligible': False,
                 **dict.fromkeys(PRICE_FIELDS)}
         pool.append(item)
     full = [item for item in pool if item['verification']['financial_complete']]
-    selected_pool = full if len(full) >= limit else pool
-    selected_pool.sort(key=lambda item: (not item['verification']['financial_complete'], -item['score'],
+    quality_pool = [item for item in pool if item['verification']['financial_quality_available'] and not item['verification']['financial_complete']]
+    selected_pool = pool
+    selected_pool.sort(key=lambda item: (0 if item['verification']['financial_complete'] else 1 if item['verification']['financial_quality_available'] else 2, -item['score'],
                                          item['components']['atr_pct'], item['symbol']))
     result['coverage'] = {'universe': len(stocks), 'price_and_known_risk_pool': len(pool),
-                          'complete_financial': len(full), 'selected': min(limit, len(selected_pool)),
-                          'excluded_counts': counts, 'financial_pool_used': 'complete' if len(full) >= limit else 'partial'}
+                          'complete_financial': len(full), 'disclosed_quality_financial': len(quality_pool),
+                          'missing_financial': len(pool)-len(full)-len(quality_pool),
+                          'selected': min(limit, len(selected_pool)), 'excluded_counts': counts,
+                          'financial_pool_used': 'complete' if len(full) >= limit else 'disclosed_quality' if len(full)+len(quality_pool)>=limit else 'partial'}
     result['verification']['financial_status'] = 'complete' if len(full) >= limit else 'partial'
     result['items'] = selected_pool[:limit]
     result['top_pick'] = result['items'][0] if result['items'] else None
     if any(item['verification']['quote_basis'] == 'next_session_previous_close' for item in result['items']):
-        result['warnings'].append('盘中迟到恢复观察榜；真实当日报价以昨收佐证此前完整日线，保留实际报价日期与时间，未冒充此前同日估值或09:00发布。财务仍按缺失处理。')
+        result['warnings'].append('盘中迟到恢复观察榜；真实当日报价以昨收佐证此前完整日线，保留实际报价日期与时间，未冒充此前同日估值或09:00发布。历史已披露质量与当前估值分别标记。')
     ai_count = sum(item['verification']['ai_reviewed'] for item in result['items'])
     result['verification']['ai_status'] = ('reviewed' if ai_count and ai_count == len(result['items'])
                                            else 'partial' if ai_count else 'unverified')
@@ -513,7 +622,8 @@ def _with_alerts(saved, moment, service=None):
 
 def _archived_release(saved, moment, limit, service=None):
     """At 09:00 a genuine preparation freezes, including when seed expired."""
-    if not isinstance(saved, dict) or saved.get('protocol') != PROTOCOL or saved.get('status') != 'watch_only':
+    if (not isinstance(saved, dict) or saved.get('protocol') != PROTOCOL or saved.get('status') != 'watch_only'
+            or saved.get('ranking_policy') != RANKING_POLICY):
         return None
     day = moment.date()
     release = dt.datetime.combine(day, dt.time(9), core.TZ)
@@ -558,19 +668,55 @@ def _archived_release(saved, moment, limit, service=None):
                 or components.get('weights') != {'technical': TECHNICAL_WEIGHT, 'financial': FINANCIAL_WEIGHT}):
             return None
         seen.add(symbol)
+        risk_keys=('technical_raw','risk_penalty','downside_deviation_60d_pct','max_drawdown_60d_pct','liquidity_proxy_20d_cny')
+        if (any(not _number(components.get(key)) for key in risk_keys)
+                or not 0<=components['technical_raw']<=100 or not 0<=components['risk_penalty']<=30
+                or any(components[key]<0 for key in risk_keys[2:]) or components['liquidity_proxy_20d_cny']<=0
+                or components.get('market_regime') not in ('normal','defensive')
+                or verification.get('risk_window_end')!=target or verification.get('risk_return_samples')!=60
+                or abs(components['technical']-round(max(0,components['technical_raw']-components['risk_penalty']),3))>.000001
+                or abs(components['risk_penalty']-_risk_penalty(components['atr_pct'],components['downside_deviation_60d_pct'],components['max_drawdown_60d_pct'],components['liquidity_proxy_20d_cny'],components['market_regime']))>.000001):
+            return None
+        try:
+            if not _day(verification.get('risk_window_start'))<_day(target):return None
+        except (TypeError,ValueError):
+            return None
         complete = verification.get('financial_complete')
+        available=verification.get('financial_quality_available')
         if complete is True:
             if (verification.get('financial_data_date') != target or not _number(components.get('financial'))
-                    or not 0 <= components['financial'] <= 100):
+                    or not 0 <= components['financial'] <= 100 or available is not True
+                    or verification.get('financial_valuation_date')!=target
+                    or verification.get('financial_evidence_basis')!='same_session_complete'):
                 return None
             try:
-                if not _day(verification.get('financial_report_date')) <= _day(verification.get('financial_publication_date')) <= _day(target):
+                report=_day(verification.get('financial_report_date'))
+                if (not report <= _day(verification.get('financial_publication_date')) <= _day(target)
+                        or not report <= _day(verification.get('financial_provider_update_date')) <= _day(target)):
                     return None
             except (TypeError, ValueError):
                 return None
-        elif complete is not False or components.get('financial') is not None:
+        elif complete is False and available is True:
+            if (verification.get('financial_evidence_basis')!='cached_disclosed_quality_without_valuation'
+                    or verification.get('financial_valuation_date') is not None
+                    or not _number(components.get('financial')) or not 0<=components['financial']<=100):
+                return None
+            try:
+                original=_day(verification.get('financial_data_date'))
+                report=_day(verification.get('financial_report_date'))
+                published=_day(verification.get('financial_publication_date'))
+                updated=_day(verification.get('financial_provider_update_date'))
+                annual=_day(verification.get('financial_roe_report_date'))
+                annual_published=_day(verification.get('financial_roe_publication_date'))
+                if (not report<=published<=original<=_day(target) or not report<=updated<=original
+                        or not annual<=annual_published<=original or not annual.isoformat().endswith('12-31')
+                        or (_day(target)-report).days>200):
+                    return None
+            except (TypeError,ValueError):return None
+        elif (complete is not False or available is not False or components.get('financial') is not None
+              or verification.get('financial_evidence_basis')!='missing'):
             return None
-        expected = TECHNICAL_WEIGHT * components['technical'] + (FINANCIAL_WEIGHT * components['financial'] if complete else 0)
+        expected = TECHNICAL_WEIGHT * components['technical'] + (FINANCIAL_WEIGHT * components['financial'] if available else 0)
         if abs(item['score'] - round(expected, 3)) > .000001:
             return None
     result = copy.deepcopy(saved)

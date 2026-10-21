@@ -50,6 +50,35 @@ function browser(options={}){
   return {api:sandbox.PagesResearch.api,calls,storage:localStorage,setFetch:fn=>{fetchImpl=fn;}};
 }
 const response=value=>({ok:true,status:200,json:async()=>structuredClone(value)});
+const brief={protocol:'market-brief-v1',date:'2026-10-19',generated_at:'2026-10-19T08:10:00+08:00',status:'partial',
+  items:[{id:'news1',title:'央行发布金融统计数据',url:'https://www.pbc.gov.cn/a.html',source:'中国人民银行',
+    published_at:'2026-10-18',published_precision:'day',collected_at:'2026-10-19T08:09:00+08:00',importance:'high',
+    importance_reason:'标题涉及宏观数据',topics:['宏观数据'],impact:'macro',scope:'官方标题及日期'}],
+  coverage:[{source:'中国人民银行',url:'https://www.pbc.gov.cn/',status:'complete',collected_at:'2026-10-19T08:09:00+08:00',count:1,error:''}],warnings:['有限来源']};
+test('market brief retains real date precision and uses same-origin snapshot only',async()=>{
+  const b=browser({fetch:async(url,init,fixtures)=>response(url.pathname.endsWith('/market-brief.json')?brief:fixtures[url.pathname])});
+  const value=await b.api('/api/market-brief');
+  assert.equal(value.items[0].published_at,'2026-10-18');assert.equal(value.items[0].published_precision,'day');
+  assert.equal(value.generated_at,'2026-10-19T08:10:00+08:00');
+  assert(b.calls.every(url=>url.startsWith('https://dopagip00.github.io/gup/')));
+});
+test('missing historical message never falls back to latest or disconnects other APIs',async()=>{
+  const b=browser();const value=await b.api('/api/market-brief?date=2026-10-16');
+  assert.equal(value.status,'historical_unavailable');assert.equal(value.items.length,0);
+  assert(!b.calls.some(url=>url.endsWith('/market-brief.json')));
+  const dashboard=await b.api('/api/dashboard');assert.equal(dashboard.meta.data_date,'2026-10-16');
+});
+test('old default message snapshot cannot relabel today and forged future/source messages fail',async()=>{
+  const old=browser({fetch:async(url,init,fixtures)=>response(url.pathname.endsWith('/market-brief.json')?{...brief,date:'2026-10-18',generated_at:'2026-10-18T08:10:00+08:00',items:[],coverage:[]}:fixtures[url.pathname])});
+  assert.equal((await old.api('/api/market-brief')).items.length,0);
+  for(const change of [{url:'https://evil.test/a'},{published_at:'2026-10-20'},{collected_at:'2026-10-19T09:30:00+08:00'}]){
+    const data=structuredClone(brief);Object.assign(data.items[0],change);
+    const b=browser({fetch:async(url,init,fixtures)=>response(url.pathname.endsWith('/market-brief.json')?data:fixtures[url.pathname])});
+    await assert.rejects(b.api('/api/market-brief'),/消息/);
+  }
+  const noTime=browser({fetch:async(url,init,fixtures)=>response(url.pathname.endsWith('/market-brief.json')?{...brief,generated_at:null}:fixtures[url.pathname])});
+  await assert.rejects(noTime.api('/api/market-brief'),/消息/);
+});
 const observation={protocol:'daily-observation-v1',date:'2026-10-19',data_date:'2026-10-16',
   generated_at:'2026-10-19T08:25:00+08:00',prepared_at:'2026-10-19T08:25:00+08:00',
   release_at:'2026-10-19T09:00:00+08:00',published_at:null,publication_timing:'prepared',

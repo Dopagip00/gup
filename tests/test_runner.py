@@ -50,6 +50,8 @@ class FakeCore:
 
 class RunnerTests(unittest.TestCase):
     def setUp(self):
+        self.brief=patch.object(runner,'refresh_market_brief',return_value={'status':'unavailable'})
+        self.brief.start();self.addCleanup(self.brief.stop)
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
         self.watch=patch.object(runner,'update_watchlist',return_value={'status':'watch_only','count':5})
         self.watch.start();self.addCleanup(self.watch.stop)
@@ -327,6 +329,17 @@ class RunnerTests(unittest.TestCase):
         core.now=lambda:dt.datetime(2026,10,19,9,7,tzinfo=runner.TZ)
         self.assertTrue(runner.needs_cached_recalculation('publish',core,core.now()))
 
+    def test_only_real_current_closing_evidence_can_enable_next_session_financial_preparation(self):
+        core=self.closing_core()
+        self.assertFalse(runner.closing_financial_ready('publish',core,core.now()))
+        self.closing_cache(core)
+        for stage in ('collect','publish','recover'):
+            self.assertTrue(runner.closing_financial_ready(stage,core,core.now()))
+        self.assertFalse(runner.closing_financial_ready('fundamentals',core,core.now()))
+        self.assertFalse(runner.closing_financial_ready('publish',core,core.now(),failure=True))
+        self.assertFalse(runner.closing_financial_ready('publish',core,core.now().replace(hour=15,minute=59)))
+        self.assertFalse(runner.closing_financial_ready('publish',core,core.now()+dt.timedelta(days=1)))
+
     def test_preopen_missing_report_skips_old_model_recalculation_only_in_collection_window(self):
         core=FakeCore(dt.datetime(2026,10,21,8,25,tzinfo=runner.TZ))
         self.current_cache(core)  # Real old report exists, but the target report does not.
@@ -494,7 +507,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(first['finished_at'],'2026-10-19T08:30:00+08:00')
         self.assertEqual(core.getkv('last_completed'),original['last_completed'])
         self.assertEqual(core.getkv('last_success'),original['last_success'])
-        news.assert_not_called();short.assert_not_called();service.refresh.assert_not_called()
+        self.assertEqual(news.call_count,2);short.assert_not_called();service.refresh.assert_not_called()
 
     def test_old_incomplete_or_future_receipts_cannot_be_relabelled_as_morning_cache(self):
         core=FakeCore();original=self.current_cache(core)
@@ -545,7 +558,7 @@ class RunnerTests(unittest.TestCase):
         with patch.object(runner,'collect_news',return_value={'status':'verified'}) as news,patch.object(runner,'short_term_refresh',return_value=contextlib.nullcontext()):
             self.assertEqual(runner.run_stage('collect',core,service)['status'],'success')
             self.assertEqual(runner.run_stage('collect',core,service)['status'],'cached')
-        service.refresh.assert_called_once_with(force=False);news.assert_called_once()
+        service.refresh.assert_called_once_with(force=False);self.assertEqual(news.call_count,2)
 
     def test_slow_market_completion_keeps_its_actual_late_time(self):
         core=FakeCore(dt.datetime(2026,10,19,8,59,tzinfo=runner.TZ));service=Mock();service.status={'status':'partial'}
@@ -784,6 +797,51 @@ class RunnerTests(unittest.TestCase):
         archive['plans']['2026-10-16']['buy']['entry_low']=1
         repository.write_text(json.dumps(archive),encoding='utf-8')
         with self.assertRaisesRegex(ValueError,'完整性'):runner.restore_plans(repository,core)
+
+
+class BriefRunnerTests(unittest.TestCase):
+    def test_late_collect_updates_only_brief_and_never_runs_market_or_formal_news(self):
+        for hour,minute in ((9,30),(12,0)):
+            core=FakeCore(dt.datetime(2026,10,19,hour,minute,tzinfo=runner.TZ));service=Mock()
+            formal={'as_of':'2026-10-19T08:20:00+08:00','status':'verified'};core.putkv('morning_news',formal)
+            with patch.object(runner,'refresh_market_brief') as brief,patch.object(runner,'collect_news') as news,patch.object(runner,'update_watchlist',return_value={'status':'watch_only','count':5}):
+                result=runner.run_stage('collect',core,service)
+            self.assertEqual(result['status'],'late_skipped');brief.assert_called_once_with(core)
+            news.assert_not_called();service.refresh.assert_not_called();self.assertEqual(core.getkv('morning_news'),formal)
+
+    def test_preopen_publish_with_current_report_refreshes_news_without_market(self):
+        core=FakeCore();service=Mock();service.reports.return_value=[{'date':'2026-10-16'}]
+        with patch.object(runner,'collect_news') as news,patch.object(runner,'load_ai_review'),patch.object(runner,'update_watchlist',return_value={'status':'watch_only','count':5}):
+            self.assertEqual(runner.run_stage('publish',core,service)['status'],'prepared')
+        news.assert_called_once_with(core);service.refresh.assert_not_called()
+
+    def test_brief_cache_retains_original_time_and_never_refreshes_formal_risk_receipt(self):
+        core=FakeCore(dt.datetime(2026,10,19,12,tzinfo=runner.TZ))
+        old={'protocol':'market-brief-v1','date':'2026-10-19','status':'complete','generated_at':'2026-10-19T11:50:00+08:00'}
+        formal={'as_of':'2026-10-19T08:20:00+08:00'};core.putkv('morning_news',formal);core.putkv('market_brief:2026-10-19',old)
+        with patch.object(runner.importlib,'import_module') as imports:self.assertIs(runner.refresh_market_brief(core),old)
+        imports.assert_not_called();self.assertEqual(core.getkv('morning_news'),formal)
+        self.assertTrue(runner.public_key('market_brief:2026-10-19'));self.assertFalse(runner.public_key('market_brief:private'))
+
+    def test_late_collection_failure_is_explicit_and_does_not_raise_or_destroy_formal_news(self):
+        core=FakeCore(dt.datetime(2026,10,19,12,tzinfo=runner.TZ));formal={'status':'verified'};core.putkv('morning_news',formal)
+        with patch.object(runner.importlib,'import_module',side_effect=RuntimeError('provider unavailable')):
+            value=runner.refresh_market_brief(core)
+        self.assertEqual(value['status'],'unavailable');self.assertEqual(value['date'],'2026-10-19')
+        self.assertIsNone(value['generated_at']);self.assertEqual(core.getkv('morning_news'),formal)
+
+    def test_five_minute_preopen_news_cache_cannot_impersonate_nine_oclock_recheck(self):
+        core=FakeCore(dt.datetime(2026,10,19,8,59,tzinfo=runner.TZ))
+        old={'date':'2026-10-19','as_of':'2026-10-19T08:58:00+08:00','status':'verified',
+            'verification_protocol':'official-sources-v3-risk31-v1','session_risks':{'status':'complete'},'market_brief':{'status':'complete'}}
+        core.putkv('morning_news',old)
+        with patch.object(runner.importlib,'import_module') as imports:self.assertIs(runner.collect_news(core),old)
+        imports.assert_not_called()
+        core.now=lambda:dt.datetime(2026,10,19,9,tzinfo=runner.TZ)
+        news=Mock(return_value={'date':'2026-10-19','status':'verified','items':[],'risk_exclusions':[]})
+        modules={'news_collector':types.SimpleNamespace(collect=news),'session_risks':types.SimpleNamespace(collect=lambda date:{'status':'complete'})}
+        with patch.object(runner.importlib,'import_module',side_effect=lambda name:modules[name]):runner.collect_news(core)
+        news.assert_called_once();self.assertEqual(core.getkv('morning_news')['as_of'],'2026-10-19T09:00:00+08:00')
 
 
 if __name__=='__main__':unittest.main()

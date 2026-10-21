@@ -15,6 +15,24 @@ spec=importlib.util.spec_from_file_location('export_static',Path(__file__).resol
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
 class PublicationTests(unittest.TestCase):
+    def test_new_ranking_evidence_preserves_old_financial_date_and_risk_components(self):
+        source={'protocol':'daily-observation-v1','date':'2026-10-21','data_date':'2026-10-20',
+            'ranking_policy':'risk-aware-observation-v2','items':[{'symbol':'sh600001','components':{
+                'technical':65,'technical_raw':80,'risk_penalty':15,'downside_deviation_60d_pct':2.1,
+                'max_drawdown_60d_pct':12,'liquidity_proxy_20d_cny':120000000,'market_regime':'risk_off'},
+                'verification':{'financial_complete':False,'financial_quality_available':True,
+                    'financial_evidence_basis':'cached_disclosed_quality_without_valuation','financial_data_date':'2026-10-19',
+                    'financial_valuation_date':None,'financial_provider_update_date':'2026-10-18',
+                    'financial_roe_report_date':'2025-12-31','financial_roe_publication_date':'2026-03-20',
+                    'risk_window_start':'2026-07-15','risk_window_end':'2026-10-20','risk_return_samples':60}}]}
+        result=module.public_watchlist(source)
+        self.assertEqual(result['ranking_policy'],'risk-aware-observation-v2')
+        self.assertEqual(result['items'][0]['components']['risk_penalty'],15)
+        self.assertEqual(result['items'][0]['verification']['financial_data_date'],'2026-10-19')
+        self.assertIsNone(result['items'][0]['verification']['financial_valuation_date'])
+        self.assertFalse(result['items'][0]['verification']['financial_complete'])
+        self.assertEqual(result['items'][0]['verification']['financial_roe_report_date'],'2025-12-31')
+        self.assertEqual(result['items'][0]['verification']['risk_return_samples'],60)
     def test_after_close_keeps_today_primary_and_prepares_next_session_separately(self):
         core=SimpleNamespace(md=SimpleNamespace(is_trading_day=lambda day:dt.date.fromisoformat(day).weekday()<5))
         tz=dt.timezone(dt.timedelta(hours=8))
@@ -110,12 +128,19 @@ class PublicationTests(unittest.TestCase):
                 'errors':['当日复核待完成'],'review':{'summary':'公开摘要','scope':'官方目录标题',
                     'run_url':'https://chatgpt.com/c/task','run_url_scope':'task_chat',
                     'reviewed_symbols':[],'risk_vetoes':[],'raw_private':'PRIVATE_MARKER'}}
+            brief={'protocol':'market-brief-v1','date':'2026-10-19','status':'partial','generated_at':'2026-10-19T08:10:00+08:00',
+                'items':[{'id':'news1','title':'央行金融统计数据','url':'https://www.pbc.gov.cn/a.html','source':'中国人民银行',
+                    'published_at':'2026-10-18','published_precision':'day','collected_at':'2026-10-19T08:09:00+08:00',
+                    'importance':'high','importance_reason':'标题涉及宏观数据','topics':['宏观数据'],'impact':'macro','scope':'仅标题与日期'}],
+                'coverage':[],'warnings':['有限取样'],'private':'PRIVATE_BRIEF'}
+            values={'ai_review':receipt,'market_brief:2026-10-19':brief}
             fake=SimpleNamespace(BASE=engine,now=lambda:dt.datetime(2026,10,19,9,tzinfo=dt.timezone(dt.timedelta(hours=8))),
                 md=SimpleNamespace(get_calendar=lambda year:{},is_trading_day=lambda day:True,CalendarUnavailable=RuntimeError),
-                getkv=lambda key,default=None:receipt if key=='ai_review' else default)
+                getkv=lambda key,default=None:values.get(key,default))
             @contextlib.contextmanager
             def connection():
                 con=sqlite3.connect(':memory:');con.execute('CREATE TABLE kv(key TEXT,value TEXT)')
+                con.execute('INSERT INTO kv VALUES(?,?)',('market_brief:2026-10-19',json.dumps(brief)))
                 try:yield con
                 finally:con.close()
             fake.connect=connection
@@ -128,6 +153,10 @@ class PublicationTests(unittest.TestCase):
             result=json.loads((root/'public/data/system.json').read_text(encoding='utf-8'))
             self.assertEqual(result['ai_review']['status'],'missing')
             self.assertEqual(result['ai_review']['errors'],['当日复核待完成'])
+            primary=json.loads((root/'public/data/market-brief.json').read_text(encoding='utf-8'))
+            dated=json.loads((root/'public/data/market-briefs/2026-10-19.json').read_text(encoding='utf-8'))
+            self.assertEqual(primary,dated);self.assertEqual(primary['items'][0]['published_precision'],'day')
+            self.assertEqual(primary['generated_at'],'2026-10-19T08:10:00+08:00');self.assertNotIn('PRIVATE_BRIEF',json.dumps(primary))
             self.assertEqual(result['ai_review']['reviewed_count'],0)
             self.assertNotIn('PRIVATE_MARKER',json.dumps(result));self.assertNotIn('review',result['ai_review'])
             watch=json.loads((root/'public/data/daily-watchlist.json').read_text(encoding='utf-8'))

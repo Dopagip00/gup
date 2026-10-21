@@ -73,13 +73,16 @@ def public_watchlist(value):
     keys={'protocol','date','data_date','signal_date','generated_at','prepared_at','prepared_data_date',
           'release_at','published_at','publication_timing','late','status','model_validated','actionable',
           'eligible','coverage','verification','warnings','method','scope','message','rankings_immutable',
-          'release_basis','review_at','current_risk_verification'}
+          'release_basis','review_at','current_risk_verification','ranking_policy'}
     result={key:copy.deepcopy(value[key]) for key in keys if key in value}
     item_keys={'symbol','name','asof','score','components','reasons','risk_notes','verification'}
     verification_keys={'quote_date','quote_consistent','price_history_complete','chase_passed',
         'financial_complete','financial_data_date','financial_report_date','financial_publication_date',
         'model_validation_status','announcements_status','session_status','ai_status',
-        'known_risk_veto_count','evidence_cutoff','financial_status','ai_reviewed'}
+        'known_risk_veto_count','evidence_cutoff','financial_status','ai_reviewed',
+        'financial_quality_available','financial_evidence_basis','financial_valuation_date','financial_provider_update_date',
+        'risk_window_start','risk_window_end','risk_return_samples',
+        'financial_roe_report_date','financial_roe_publication_date'}
     def verification(raw, cutoff):
         raw = raw if isinstance(raw, dict) else {}
         projected = {key:copy.deepcopy(v) for key,v in raw.items() if key in verification_keys}
@@ -91,7 +94,8 @@ def public_watchlist(value):
         row={key:copy.deepcopy(raw[key]) for key in item_keys if key in raw}
         row['verification']=verification(raw.get('verification'), value.get('generated_at'))
         components=raw.get('components',{})
-        row['components']={key:copy.deepcopy(components[key]) for key in ('technical','financial','atr_pct','return_5d_pct','ma20_deviation_pct') if key in components}
+        row['components']={key:copy.deepcopy(components[key]) for key in ('technical','financial','atr_pct','return_5d_pct','ma20_deviation_pct',
+            'technical_raw','risk_penalty','downside_deviation_60d_pct','max_drawdown_60d_pct','liquidity_proxy_20d_cny','market_regime') if key in components}
         row['components']['weights']={key:components.get('weights',{}).get(key) for key in ('technical','financial')}
         for key,limit in (('reasons',5),('risk_notes',8)):
             row[key]=[str(text)[:300] for text in raw.get(key,[])[:limit]]
@@ -212,6 +216,7 @@ def export_site(output_dir, service, engine_dir=None):
     import daily_plan
     import forecast_audit
     import daily_watchlist
+    import market_brief
     output = Path(output_dir).resolve()
     engine = Path(engine_dir or core.BASE).resolve()
     version = json.loads((engine/'version.json').read_text(encoding='utf-8'))
@@ -254,6 +259,13 @@ def export_site(output_dir, service, engine_dir=None):
     write('data/dashboard.json',dashboard)
     write('data/daily-plan.json',daily_plan.read())
     moment=core.now()
+    write('data/market-brief.json',market_brief.read(core=core,now=moment))
+    with core.connect() as con:
+        brief_rows=con.execute("SELECT key FROM kv WHERE key LIKE 'market_brief:%' ORDER BY key DESC LIMIT 366").fetchall()
+    for row in brief_rows:
+        brief_date=row[0][len('market_brief:'):]
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}',brief_date):
+            write('data/market-briefs/'+brief_date+'.json',market_brief.read(brief_date,core=core,now=moment))
     watch_date,next_watch_date=watchlist_export_dates(core,moment)
     write('data/daily-watchlist.json',public_watchlist(daily_watchlist.read(date=watch_date,service=service,now=moment)))
     if next_watch_date:

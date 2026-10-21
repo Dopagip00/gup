@@ -33,6 +33,7 @@ def risk_receipt(moment=NOW, events=None):
 
 class NewsTests(unittest.TestCase):
     def setUp(self):
+        broad=patch.object(news,'_brief_sources',return_value=([],[]));broad.start();self.addCleanup(broad.stop)
         observation=patch.object(news,'_risk_window',side_effect=lambda moment,**kwargs:risk_receipt(moment))
         observation.start();self.addCleanup(observation.stop)
 
@@ -316,6 +317,61 @@ class RiskObservationTests(unittest.TestCase):
         self.assertEqual(record['risk_exclusions'][0]['published_at'],'2026-10-01')
         self.assertEqual(record['risk_exclusions'][0]['resolution_status'],'not_determined')
         self.assertIn('窗口外不表示安全',record['expiry_note'])
+
+
+class BroadBriefTests(unittest.TestCase):
+    def test_official_first_page_rows_keep_link_date_identity_and_day_precision(self):
+        html='<dl><dd><span>2026-10-19</span><a href="/aboutus/mediacenter/hotandd/c/c_20261019_10835135.shtml" title="首批主动ETF获批">短标题</a></dd></dl>'
+        items=news.parse_official_headlines(html,'上交所',news.SSE_NEWS_PAGE,NOW)
+        self.assertEqual(items[0]['published_at'],'2026-10-19');self.assertEqual(items[0]['published_precision'],'date')
+        self.assertEqual(items[0]['title'],'首批主动ETF获批')
+        pbc='<tr><td><a href="/goutongjiaoliu/113456/113469/202610190001/index.html">金融统计数据</a></td><td>2026-10-19</td></tr>'
+        self.assertEqual(len(news.parse_official_headlines(pbc,'央行',news.PBC_PAGE,NOW)),1)
+        with self.assertRaises(news.NewsError):news.parse_official_headlines('<a href="/x">未知日期</a>','央行',news.PBC_PAGE,NOW)
+
+    def test_future_external_links_and_unrelated_page_dates_never_become_headlines(self):
+        html='<span>2026-10-19</span><li><a href="https://evil.test/1.html">外部标题</a></li>'
+        with self.assertRaises(news.NewsError):news.parse_official_headlines(html,'央行',news.PBC_PAGE,NOW)
+        html='<li>2026-10-20<a href="/123/456.html">未来消息</a></li>'
+        self.assertEqual(news.parse_official_headlines(html,'央行',news.PBC_PAGE,NOW),[])
+
+    def test_csrc_reads_article_declared_date_instead_of_guessing_homepage_year(self):
+        url='https://www.csrc.gov.cn/csrc/c100028/c7665462/content.shtml'
+        with patch.object(news,'_brief_get',side_effect=['<a href="'+url+'">先行赔付指导意见</a><span>10-19</span>',
+            '<h1>先行赔付指导意见</h1><p>日期：2026-10-19 来源：证监会</p>']):
+            items=news._csrc_headlines(NOW,'2026-10-15')
+        self.assertEqual(items[0]['published_at'],'2026-10-19');self.assertEqual(items[0]['published_precision'],'date')
+        with patch.object(news,'_brief_get',side_effect=['<a href="'+url+'">标题</a>','<p>只有10-19</p>']):
+            with self.assertRaises(news.NewsError):news._csrc_headlines(NOW,'2026-10-15')
+
+    def test_fixed_topics_deduplicate_and_limit_issuer_news_without_stock_forecasts(self):
+        items=[]
+        for index in range(12):
+            items.append({'title':'金融统计与货币政策'+str(index),'url':news.PBC_PAGE.replace('index.html',str(index)+'.html'),
+                'published_at':'2026-10-19','published_precision':'date','observed_at':NOW.isoformat(),
+                'source':'央行','kind':'market_news','verification':'官方目录，未读正文'})
+        items.append(dict(items[0]));value=news.market_brief(items,[],NOW)
+        self.assertEqual(len(value['items']),8);self.assertEqual(len({row['title'] for row in value['items']}),8)
+        self.assertEqual(value['items'][0]['impact'],'macro');self.assertNotIn('beneficiary_symbols',value)
+        self.assertTrue(all(row['published_precision']=='day' for row in value['items']))
+        insurance=dict(items[0],title='推动普惠保险由风险补偿向风险减量转型')
+        self.assertEqual(news.market_brief([insurance],[],NOW)['items'][0]['impact'],'general')
+
+    def test_failed_source_is_visible_and_does_not_claim_no_news(self):
+        with patch.object(news,'_brief_get',side_effect=news.NewsError('SSL error')),patch.object(news,'_csrc_headlines',side_effect=news.NewsError('format failed')):
+            items,coverage=news._brief_sources(NOW,'2026-10-15',fixed_observed=NOW)
+        self.assertEqual(items,[]);self.assertEqual(len(coverage),3)
+        self.assertTrue(all(row['status']=='error' and row['collected_at']==NOW.isoformat() for row in coverage))
+
+    def test_late_brief_is_independent_real_time_and_never_claims_verified_morning(self):
+        late=NOW.replace(hour=12)
+        raw={'title':'央行金融统计','url':'https://www.pbc.gov.cn/1.html','source':'央行','kind':'market_news',
+            'published_at':'2026-10-19','published_precision':'date','observed_at':late.isoformat()}
+        with patch.object(news,'_brief_sources',return_value=([raw],[])) as sources,patch.object(news,'_brief_get',side_effect=news.NewsError('unavailable')):
+            value=news.collect_brief_only(late)
+        self.assertTrue(value['late']);self.assertEqual(value['generated_at'],late.isoformat())
+        self.assertEqual(value['date'],'2026-10-19');self.assertNotEqual(value['status'],'verified')
+        self.assertTrue(sources.call_args.kwargs['allow_late']);self.assertTrue(any('晚到' in message for message in value['warnings']))
 
 
 if __name__ == '__main__':

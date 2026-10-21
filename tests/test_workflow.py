@@ -20,14 +20,14 @@ class WorkflowBranchTests(unittest.TestCase):
     def evaluate(self, condition, *, event='schedule', ref='refs/heads/main', research_flag='',
                  deploy_flag='', repository='Dopagip00/gup', default_branch='main',
                  site_ready='true', stage='', schedule='0 1 * * 1-5', deploy_result='success',
-                 resolved_stage='publish',health_result='success',data_ready='true'):
+                 resolved_stage='publish',health_result='success',data_ready='true',close_ready='false'):
         expression=condition.replace('&&',' and ').replace('||',' or ')
         context={
             'vars':SimpleNamespace(ENABLE_SCHEDULED_RESEARCH=research_flag, ENABLE_PAGES_DEPLOY=deploy_flag),
             'github':SimpleNamespace(repository=repository, event_name=event, ref=ref,
                 event=SimpleNamespace(repository=SimpleNamespace(default_branch=default_branch),
                     inputs=SimpleNamespace(stage=stage), schedule=schedule)),
-            'needs':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
+            'needs':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready,close_ready=close_ready)),
                 fundamentals=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
                 deploy=SimpleNamespace(result=deploy_result),health=SimpleNamespace(result=health_result,outputs=SimpleNamespace(data_ready=data_ready))),
             'steps':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
@@ -251,6 +251,9 @@ class WorkflowBranchTests(unittest.TestCase):
             self.assertEqual(self.enabled('fundamentals',schedule=schedule),schedule=='19 1 * * 1-5')
         self.assertFalse(self.enabled('fundamentals',event='push',schedule=''))
         self.assertFalse(self.enabled('fundamentals',event='push',schedule='',deploy_result='failure'))
+        self.assertTrue(self.enabled('fundamentals',event='push',schedule='',close_ready='true'))
+        self.assertFalse(self.enabled('fundamentals',event='push',schedule='',close_ready='true',data_ready='false'))
+        self.assertFalse(self.enabled('fundamentals',event='push',schedule='',close_ready='true',deploy_result='failure'))
         self.assertFalse(self.enabled('fundamentals',schedule='19 1 * * 1-5',deploy_result='failure'))
         for schedule in ('19 1 * * 1-5','20 8 * * 1-5','10 9 * * 1-5'):
             self.assertTrue(self.enabled('fundamentals',schedule=schedule,health_result='failure',data_ready='true'))

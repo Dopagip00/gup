@@ -100,10 +100,36 @@
   function cacheVictim(keys,incoming){
     return keys.find(key=>!protectedCache(key)) || (protectedCache(incoming)?keys.find(key=>key!==incoming):null);
   }
+  function emptyBrief(date,status='unavailable'){
+    return {protocol:'market-brief-v1',date,generated_at:null,status,items:[],coverage:[],warnings:['该日没有可核验的真实早间消息快照，未使用其他日期回填。']};
+  }
+  function validateBrief(value,m,path){
+    const hosts=['www.sse.com.cn','static.sse.com.cn','finance.cctv.com','www.pbc.gov.cn','www.csrc.gov.cn'];
+    const urlOk=value=>{try{const u=new URL(value);return u.protocol==='https:'&&hosts.includes(u.hostname)&&!u.username&&!u.password&&!u.search&&!u.hash&&(!u.port||u.port==='443');}catch{return false;}};
+    const stamp=value=>typeof value==='string'&&/T.+(?:Z|[+-]\d\d:\d\d)$/.test(value)&&Number.isFinite(Date.parse(value));
+    if(value.protocol!=='market-brief-v1'||!validDate(value.date)||!['complete','partial','unavailable','historical_unavailable','closed'].includes(value.status)
+        ||!Array.isArray(value.items)||value.items.length>8||!Array.isArray(value.coverage)||value.coverage.length>8||!Array.isArray(value.warnings))throw Error('早间消息合同无效');
+    if(path.startsWith('data/market-briefs/')&&value.date!==path.slice(-15,-5))throw Error('消息档案日期不一致');
+    const generated=Date.parse(value.generated_at),limit=Date.parse(m.generated_at);
+    if(value.generated_at!==null&&(!stamp(value.generated_at)||generated>limit||clock(new Date(generated)).date!==value.date))throw Error('消息采集时间无效');
+    if(value.items.length&&!stamp(value.generated_at)||value.status==='complete'&&!value.items.length)throw Error('消息条目缺少真实收集时间');
+    for(const item of value.items){
+      if(!item||typeof item.title!=='string'||item.title.length>250||!urlOk(item.url)||!stamp(item.collected_at)||Date.parse(item.collected_at)>generated
+          ||clock(new Date(item.collected_at)).date!==value.date||!['day','minute','second'].includes(item.published_precision))throw Error('消息条目来源或收集时间无效');
+      if(item.published_precision==='day'){
+        if(!validDate(item.published_at)||item.published_at>clock(new Date(item.collected_at)).date)throw Error('消息发布时间来自未来');
+      }else if(!stamp(item.published_at)||Date.parse(item.published_at)>Date.parse(item.collected_at))throw Error('消息发布时间无效');
+    }
+    for(const source of value.coverage){
+      if(!source||!urlOk(source.url)||!['complete','partial','error'].includes(source.status)||!Number.isInteger(source.count)||source.count<0||source.count>10000
+          ||source.collected_at!==null&&(!stamp(source.collected_at)||Date.parse(source.collected_at)>generated||clock(new Date(source.collected_at)).date!==value.date))throw Error('消息来源覆盖无效');
+    }
+  }
   function validateBundle(paths,data,m){
     for(const path of paths){
       const value=data[path];
       if(!value || typeof value!=='object')throw new Error('公开研究文件结构无效');
+      if(path==='data/market-brief.json'||path.startsWith('data/market-briefs/'))validateBrief(value,m,path);
       if(path==='data/calendar.json' && Array.isArray(value))throw new Error('交易日历结构无效');
       if(path==='data/dashboard.json' && (!Array.isArray(value.stocks) || value.meta?.data_date!==m.data_date))throw new Error('行情日期与公开快照清单不一致');
       if(path==='data/reports.json')reportDates(value,m);
@@ -285,6 +311,17 @@
         file='data/daily-watchlist.json';b=await bundle([file,'data/calendar.json'],'daily-watchlist');
       }
       const value=gateWatchlist(b.files[file],b.files['data/calendar.json'],date);
+      if(b.transport.mode==='offline')value.warnings=[...(value.warnings||[]),b.transport.message];
+      return attach(value,b.transport);
+    }
+    if(name==='market-brief'){
+      const date=u.searchParams.get('date');if(date&&!validDate(date))throw Error('无效日期');
+      const day=date||clock().date,file=date?`data/market-briefs/${day}.json`:'data/market-brief.json';
+      let b;
+      try{b=await bundle([file],`market-brief:${date||'latest'}`);}
+      catch(error){if(error.httpStatus===404)return emptyBrief(day,date&&day<clock().date?'historical_unavailable':'unavailable');throw error;}
+      const value=b.files[file];
+      if(value.date!==day)return attach(emptyBrief(day,date&&day<clock().date?'historical_unavailable':'unavailable'),b.transport);
       if(b.transport.mode==='offline')value.warnings=[...(value.warnings||[]),b.transport.message];
       return attach(value,b.transport);
     }

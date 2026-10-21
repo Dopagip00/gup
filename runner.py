@@ -47,7 +47,7 @@ def encode(value):
 
 
 def public_key(key):
-    return key in PUBLIC_KEYS or re.fullmatch(r'daily_(?:plan|watchlist):\d{4}-\d{2}-\d{2}', key) is not None
+    return key in PUBLIC_KEYS or re.fullmatch(r'(?:daily_(?:plan|watchlist)|market_brief):\d{4}-\d{2}-\d{2}', key) is not None
 
 
 def clean_value(key, value):
@@ -456,6 +456,21 @@ def save_watchlists(core, path):
 
 def collect_news(core):
     moment = core.now()
+    previous=core.getkv('morning_news',{})
+    try:
+        stamp=dt.datetime.fromisoformat(previous.get('as_of',''))
+        if stamp.tzinfo is None:raise ValueError('新闻时间必须带时区')
+        stamp=stamp.astimezone(TZ)
+        brief=previous.get('market_brief',{})
+        if (previous.get('date')==moment.date().isoformat()
+                and previous.get('status')=='verified' and previous.get('verification_protocol')=='official-sources-v3-risk31-v1'
+                and previous.get('session_risks',{}).get('status')=='complete' and brief.get('status')=='complete'
+                and stamp.tzinfo is not None and stamp.date()==moment.date() and dt.timedelta()<=moment-stamp<dt.timedelta(minutes=5)
+                and dt.time(8)<=moment.time().replace(tzinfo=None)<dt.time(9,30)
+                and moment.time().replace(tzinfo=None)<dt.time(9)
+                and core.md.is_trading_day(moment.date().isoformat())):
+            return previous
+    except (AttributeError,TypeError,ValueError):pass
     try:
         target = core.md.last_completed_session(moment.replace(hour=9, minute=0, second=0, microsecond=0))
         result = importlib.import_module('news_collector').collect(coverage_start=target)
@@ -485,7 +500,40 @@ def collect_news(core):
         result['status'] = 'unavailable'
         result['errors'] = list(result.get('errors') or []) + ['全部资讯核验完成已超出盘前窗口，暂停新推荐。']
     core.putkv('morning_news', result)
+    brief=result.get('market_brief')
+    if isinstance(brief,dict):
+        try:
+            module=importlib.import_module('market_brief')
+            core.putkv('market_brief:'+moment.date().isoformat(),module.public(brief,date=moment.date().isoformat(),now=finished))
+        except (AttributeError,TypeError,ValueError,KeyError):
+            # The underlying strict source receipts remain intact. An invalid
+            # independent display never becomes a new formal qualification.
+            result['market_brief']={'protocol':'market-brief-v1','date':moment.date().isoformat(),
+                'generated_at':None,'status':'unavailable','items':[],'coverage':[],
+                'warnings':['消息摘要未通过真实时间与官方来源合同核验。']}
+            core.putkv('market_brief:'+moment.date().isoformat(),result['market_brief'])
+            core.putkv('morning_news',result)
     return result
+
+
+def refresh_market_brief(core):
+    """Independent late-safe context; never refreshes formal morning receipts."""
+    moment=core.now();date=moment.date().isoformat()
+    try:
+        if moment.time().replace(tzinfo=None)<dt.time(8) or not core.md.is_trading_day(date):return None
+        old=core.getkv('market_brief:'+date,{})
+        if isinstance(old,dict) and old.get('protocol')=='market-brief-v1' and old.get('status')=='complete' and old.get('date')==date:
+            stamp=dt.datetime.fromisoformat(old.get('generated_at',''))
+            if stamp.tzinfo and stamp.astimezone(TZ).date()==moment.date() and dt.timedelta()<=moment-stamp<dt.timedelta(minutes=15):return old
+        target=core.md.last_completed_session(moment.replace(hour=9,minute=0,second=0,microsecond=0))
+        value=importlib.import_module('news_collector').collect_brief_only(coverage_start=target)
+        module=importlib.import_module('market_brief')
+        value=module.public(value,date=date,now=core.now())
+    except Exception:
+        value={'protocol':'market-brief-v1','date':date,'generated_at':None,'status':'unavailable',
+            'items':[],'coverage':[],'warnings':['本次独立消息采集失败；未改写原正式晨间风险核验或将旧消息改标今日。']}
+    core.putkv('market_brief:'+date,value)
+    return value
 
 
 def fast_valuations(core, target):
@@ -601,6 +649,18 @@ def current_morning_research(core, moment, target):
 
 def current_close_research(core, moment, target):
     return _current_research(core, moment, target, after_close=True)
+
+
+def closing_financial_ready(stage, core, moment, *, failure=False):
+    """A real completed close may prepare tomorrow even after a source push."""
+    if (failure or stage not in ('collect','publish','recover')
+            or moment.time().replace(tzinfo=None)<dt.time(16)):
+        return False
+    target=moment.date().isoformat()
+    try:
+        return bool(core.md.is_trading_day(target) and current_close_research(core,moment,target) is not None)
+    except (ValueError,TypeError,sqlite3.Error):
+        return False
 
 
 def public_universe_receipt(core):
@@ -760,6 +820,8 @@ def run_stage(stage, core, service):
     target = core.md.last_completed_session(moment.replace(hour=9, minute=0, second=0, microsecond=0))
     result['target_date'] = target
     after_close = moment.time().replace(tzinfo=None) >= dt.time(16)
+    if stage in ('collect','publish') and moment.time().replace(tzinfo=None)>=dt.time(9,30):
+        refresh_market_brief(core)
     if stage == 'recover':
         # This explicit manual stage repairs completed data at its real time.
         # It cannot create an 08:00 receipt, rewrite advice, or fake a 09:00 pick.
@@ -786,10 +848,11 @@ def run_stage(stage, core, service):
         if moment.time().replace(tzinfo=None) >= dt.time(9, 30):
             return attach_watchlist(dict(result, status='late_skipped', reason='已到北京时间09:30，不补造晨间采集或新买入建议'), core, service)
         if moment.time().replace(tzinfo=None) >= dt.time(9):
+            refresh_market_brief(core)
             return attach_watchlist(dict(result, status='skipped', reason='已进入09点发布窗口，跳过耗时行情重算并保留原始采集记录'), core, service)
         cached = current_morning_research(core, moment, target)
         if cached:
-            news_snapshot = core.getkv('morning_news', {})
+            news_snapshot = collect_news(core)
             result.update(status='cached', research=cached, research_cached=True,
                           research_finished_at=cached['finished_at'], finished_at=core.now().isoformat(),
                           news_status=news_snapshot.get('status') if isinstance(news_snapshot, dict) else None,
@@ -826,11 +889,13 @@ def run_stage(stage, core, service):
                     reports=service.reports()
                     missing=isinstance(reports,list) and not any(isinstance(row,dict) and row.get('date')==target for row in reports)
                 except Exception:
-                    missing=False
+                    missing=False;reports=None
                 if missing:
                     recovered=run_stage('collect',core,service)
                     recovered.update(requested_stage='publish',trigger='preopen_missing_completed_report')
                     return recovered
+                if isinstance(reports,list) and any(isinstance(row,dict) and row.get('date')==target for row in reports):
+                    collect_news(core)
             return attach_watchlist(dict(result, status='prepared',
                         reason='独立观察榜已预备；09:00仅按实际客户端时钟揭榜，不冒充服务器准点发布或买入建议'), core, service)
         if after_close:
@@ -946,6 +1011,7 @@ def main(argv=None):
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
             output.write('site_ready='+str((args.output_dir/'index.html').is_file()).lower()+'\n')
+            output.write('close_ready='+str(closing_financial_ready(args.stage,core,core.now(),failure=failure)).lower()+'\n')
     return 1 if failure else 0
 
 
