@@ -1,7 +1,11 @@
 """Check workflow authorization and automatic triggers without calling GitHub."""
 from fnmatch import fnmatchcase
+import json
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import textwrap
 from types import SimpleNamespace
 import unittest
 
@@ -140,6 +144,96 @@ class WorkflowBranchTests(unittest.TestCase):
         self.assertIn('WATCHLISTS_BASE_SHA',step)
         self.assertIn("research/daily-watchlists.json",step)
         self.assertIn("Observation archive changed remotely; refusing replacement.",step)
+
+    def test_queued_source_checkout_reads_current_business_archives_before_restore(self):
+        research=self.job('research')
+        read=research.index('Read latest default-branch business archives before restoring state')
+        restore=research.index("Restore the previous stage's public research state")
+        run=research.index('Collect or publish using actual Beijing time')
+        self.assertLess(read,restore);self.assertLess(restore,run)
+        self.assertIn('PLANS_BASE_SHA: ${{ steps.archives.outputs.plans_base_sha }}',research)
+        self.assertIn('WATCHLISTS_BASE_SHA: ${{ steps.archives.outputs.watchlists_base_sha }}',research)
+        locator=research.split('      - name: Locate the latest successful persistent research artifact',1)[1].split('      - name:',1)[0]
+        self.assertNotIn('readFileSync',locator)
+        self.assertNotIn('base_sha',locator)
+        self.assertIn("['huyan-research-cache','huyan-research-cache-financial']",locator)
+        self.assertIn('!a.expired',locator)
+
+    def run_archive_step(self,scenario):
+        step=self.job('research').split('      - name: Read latest default-branch business archives before restoring state',1)[1].split('      - name:',1)[0]
+        script=textwrap.dedent(step.split('          script: |\n',1)[1])
+        harness=r'''
+        const actualRequire=require,crypto=require('node:crypto');
+        const scenario=SCENARIO,files={'research/daily-plans.json':'old pinned plans','research/daily-watchlists.json':'old pinned watchlist'};
+        const outputs={},requests=[],blobs={};
+        function file(path,text) {
+          const bytes=Buffer.from(text),sha=crypto.createHash('sha1').update(Buffer.from('blob '+bytes.length+'\0')).update(bytes).digest('hex');
+          return {type:'file',path,size:bytes.length,sha,encoding:'base64',content:bytes.toString('base64')};
+        }
+        const current={
+          'research/daily-plans.json':file('research/daily-plans.json','{"plans":{"21":"current preserved advice"}}'),
+          'research/daily-watchlists.json':file('research/daily-watchlists.json','{"watchlists":{"21":"current reviewed observation"}}')
+        };
+        const expected=Object.fromEntries(Object.entries(current).map(([path,data])=>[path,{sha:data.sha,text:Buffer.from(data.content,'base64').toString()}]));
+        const fs={mkdirSync(){},writeFileSync(path,bytes){files[path]=bytes.toString();},rmSync(path){delete files[path];},
+          readFileSync(){throw Error('must not trust pinned checkout bytes');},existsSync(){throw Error('must not inspect pinned archive lease');}};
+        const github={rest:{repos:{async getContent(args){
+          requests.push(args);
+          if(scenario==='404')throw Object.assign(Error('not found'),{status:404});
+          if(scenario==='403')throw Object.assign(Error('forbidden'),{status:403});
+          let data={...current[args.path]};
+          if(scenario==='sha')data.sha='0'.repeat(40);
+          if(scenario==='base64')data.content='%%%';
+          if(scenario==='size')data.size=64*1024*1024+1;
+          if(scenario==='path')data.path='research/unexpected.json';
+          if(scenario==='type')data.type='dir';
+          if(scenario==='blob'){
+            blobs[data.sha]={...data};data.encoding='none';data.content='';
+          }
+          return {data};
+        }},git:{async getBlob(args){requests.push(args);return {data:blobs[args.file_sha]};}}}};
+        const context={repo:{owner:'Dopagip00',repo:'gup'},payload:{repository:{default_branch:'release/research'}}};
+        const core={setOutput(key,value){outputs[key]=value;}};
+        (async()=>{
+          let error=null;
+          try{await new Function('github','context','core','require','return (async()=>{\n'+SCRIPT+'\n})();')(
+            github,context,core,name=>name==='node:fs'?fs:actualRequire(name));}
+          catch(exc){error=exc.message;}
+          process.stdout.write(JSON.stringify({error,files,outputs,requests,expected}));
+        })().catch(error=>{console.error(error);process.exitCode=1;});
+        '''.replace('SCENARIO',json.dumps(scenario)).replace('SCRIPT',json.dumps(script))
+        result=subprocess.run(['node','-e',harness],capture_output=True,text=True,check=True)
+        return json.loads(result.stdout)
+
+    @unittest.skipUnless(shutil.which('node'),'Node executes the workflow GitHub script fixture')
+    def test_current_branch_archives_replace_queued_pinned_bytes_and_capture_real_leases(self):
+        for scenario in ('normal','blob'):
+            with self.subTest(scenario=scenario):
+                result=self.run_archive_step(scenario)
+                self.assertIsNone(result['error'])
+                for path,expected in result['expected'].items():
+                    self.assertEqual(result['files'][path],expected['text'])
+                    key='plans_base_sha' if path.endswith('daily-plans.json') else 'watchlists_base_sha'
+                    self.assertEqual(result['outputs'][key],expected['sha'])
+                for request in result['requests']:
+                    if 'path' in request:self.assertEqual(request['ref'],'release/research')
+
+    @unittest.skipUnless(shutil.which('node'),'Node executes the workflow GitHub script fixture')
+    def test_only_real_404_removes_stale_checkout_archive_and_sets_missing_lease(self):
+        missing=self.run_archive_step('404')
+        self.assertIsNone(missing['error']);self.assertEqual(missing['files'],{})
+        self.assertEqual(missing['outputs'],{'plans_base_sha':'missing','watchlists_base_sha':'missing'})
+        forbidden=self.run_archive_step('403')
+        self.assertEqual(forbidden['error'],'forbidden');self.assertEqual(forbidden['outputs'],{})
+        self.assertEqual(forbidden['files']['research/daily-plans.json'],'old pinned plans')
+
+    @unittest.skipUnless(shutil.which('node'),'Node executes the workflow GitHub script fixture')
+    def test_malformed_current_archive_never_claims_old_checkout_is_current(self):
+        for scenario in ('sha','base64','size','path','type'):
+            with self.subTest(scenario=scenario):
+                result=self.run_archive_step(scenario)
+                self.assertIsNotNone(result['error']);self.assertEqual(result['outputs'],{})
+                self.assertEqual(result['files']['research/daily-plans.json'],'old pinned plans')
 
     def test_publish_retries_preserve_archive_and_do_not_queue_long_financial_jobs(self):
         research=self.job('research')
