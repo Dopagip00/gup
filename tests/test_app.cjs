@@ -260,8 +260,9 @@ test('only valid important news leads the default three, retaining true dates an
   assert.equal(a.get('market-brief-items').children[0].children.filter(child=>child.tag==='p').length,0);
 });
 test('news keeps actual source failures visible without repeating generic method notes in the main column',()=>{
-  const a=app({now:WATCH_NOW}),data=marketBrief();data.warnings=['仅按官方标题和固定主题规则选取，重要性不是利好/利空评分，不推断受益股。','优先隔夜及当日已发布消息；不足时保留窗口内较早背景，日期精度不会伪造为具体时分。'];
+  const a=app({now:WATCH_NOW}),data=marketBrief();data.late=true;data.warnings=['仅按官方标题和固定主题规则选取，重要性不是利好/利空评分，不推断受益股。','优先隔夜及当日已发布消息；不足时保留窗口内较早背景，日期精度不会伪造为具体时分。','本次为实际晚到消息更新，不是08点采集或09点准时发布证明，不授权新买入。'];
   a.ui.renderMarketBrief(data);assert.equal(a.get('market-brief-gap').hidden,true);assert.match(a.get('market-brief-warnings').textContent,/仅按官方标题/);assert.match(a.get('market-brief-warnings').textContent,/优先隔夜及当日已发布消息/);
+  assert.match(a.get('market-brief-warnings').textContent,/本次为实际晚到消息更新/);assert.match(a.get('market-brief-date').textContent,/迟到整理/);
   data.coverage=[{source:'交易所',status:'error',count:0}];a.ui.renderMarketBrief(data);
   assert.equal(a.get('market-brief-gap').hidden,false);assert.equal(a.get('market-brief-gap').textContent,'来源缺口：交易所');
 });

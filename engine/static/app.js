@@ -590,7 +590,7 @@ function renderMarketBrief(data,options={},expected=state.historyDate||shanghaiD
   if(rejected)warnings.push(`${rejected}条消息缺少有效日期或来源时间，暂未展示。`);
   $('market-brief-empty').hidden=count>0;
   if(!count)empty(data.status==='closed'?'官方交易日历休市，无当日早间消息记录。':data.status==='historical_unavailable'?`${expected} 暂无当时保存的消息，未使用今天的信息回填。`:known?'当前窗口暂无可展示的重要消息。':'尚未取得完整来源记录。');
-  const concreteGap=warnings.find(note=>!/仅按官方标题|重要性不是利好|不推断受益股|^优先隔夜及当日已发布消息/.test(note));
+  const concreteGap=warnings.find(note=>!/仅按官方标题|重要性不是利好|不推断受益股|^优先隔夜及当日已发布消息|^本次为实际晚到消息更新/.test(note));
   if(concreteGap){$('market-brief-gap').hidden=false;text('market-brief-gap',concreteGap);}
   const sourceNotes=coverage.map(row=>`${row.source||'来源未提供'}：${({complete:'已收集',partial:'部分收集',error:'未取得'}[row.status]||'待核验')}${row.collected_at?`，${shortTime(row.collected_at)}`:''}`);
   text('market-brief-warnings',[...new Set([...warnings,...sourceNotes])].join('\n'));
