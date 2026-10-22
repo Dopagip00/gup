@@ -1,0 +1,21 @@
+{
+  "protocol": "fixed-short-confirmation-v1-audit-20261022",
+  "registered_at": "2026-10-22T13:31:52+08:00",
+  "purpose": "Test one frozen short-horizon consistency veto before viewing its outcomes; never promote an unvalidated model",
+  "universe": "Current active Shanghai symbols sorted SHA256(symbol), positions [480:840]; excludes earlier first-120/240 audits; current-universe survivorship remains",
+  "signal_dates": "Benchmark sessions from 2025-06-02 through 2026-09-30 with both D1/D2 no later than 2026-09-30, every tenth session starting the first; no October feedback outcomes",
+  "baseline": "Same existing anti-chase, price-integrity and minimum-history exclusions; descending risk-aware-observation-v2 technical score, ATR then symbol ties",
+  "candidate": "Identical baseline pool and ranking, plus current ridge-cycle-v3 two-session point estimate strictly above existing 0.30 percentage-point roundtrip stress, close >= MA5, five-session return > 0 and five-session stock-minus-index return >= 0; all evidence prefix-only and benchmark-aligned",
+  "model_use": "Negative/missing or incoherent evidence only vetoes an observation; a positive point estimate neither adds points nor grants model_validated/eligible/actionable",
+  "boundary_clarified_at": "2026-10-22T13:33:35+08:00",
+  "selection_boundary": "Build each pool and freeze all ranked selections using signal-date-or-earlier evidence before reading any D1/D2 outcome values; never remove an originally selected stock because its later outcome is missing",
+  "unresolved_rule": "Keep any selected slot with missing/invalid D1/D2 prices or zero trading volume as unresolved, not cash; retain its date and slot, withhold complete all-date return summaries and deny deployment support if any selected outcome is unresolved",
+  "weights": "Production keeps existing 60/40 and financial evidence groups; financial weights and complete-pool priority are not changed by this isolated experiment",
+  "financial_performance_tested": false,
+  "financial_reason": "Historical point-in-time financial/news/status snapshots unavailable; no current records inserted into past dates. This is a price-component ablation, not a replay of the full published recommendation pipeline",
+  "outcome": "D1 raw open to D2 raw close minus 0.30 percentage points; fixed top1 and five equal 20-percent slots, unfilled slots cash=0; empty dates remain in opportunity denominator",
+  "benchmarks": ["cash=0", "same-date Shanghai index D1 raw open to D2 raw close minus identical 0.30 stress"],
+  "summaries": ["all-date mean", "mean excess index", "worst date", "worst 10-percent mean", "synthetic drawdown", "dates with 1/5 candidates", "slot utilization", "fixed first/second chronological halves"],
+  "deployment_rule": "Do not search thresholds or change coefficients after results. If candidate both mean and worst-decile return worsen versus baseline for either top1 or top5, leave this combination offline. Otherwise disclose all mean/tail/coverage tradeoffs; this consistency constraint is never evidence of validated profitability",
+  "limitations": ["current-universe survivorship", "current adjusted-price vintage", "shared market/date shocks", "price-only ablation lacks historical financial/news/status and sector data", "raw price outcomes omit dividend cash and corporate-action total returns", "no limit-board, fill or actual order model", "not the actual published cohorts or future accuracy"]
+}

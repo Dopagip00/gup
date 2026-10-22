@@ -55,7 +55,10 @@ class WatchlistTests(unittest.TestCase):
                 'stale': False, 'excluded': False, 'eligible': False, 'score': 80 + i,
                 'bar_count': 400, 'atr14': .2, 'close': 10, 'raw_close': 10,
                 'entry_low': 999, 'entry_high': 1000, 'stop_loss': 998, 'take_profit': 1001,
-                'prediction': {'eligible': False, 'expected_return_pct': 99999 - i},
+                'prediction': {'available': True, 'eligible': False, 'expected_return_pct': 1 + i * .01,
+                               'model_version': watch.forecast.MODEL_VERSION,
+                               'validation_protocol': watch.forecast.VALIDATION_PROTOCOL,
+                               'target_kind': 'next_open_to_following_close', 'as_of_date': '2026-10-19'},
                 'chase_risk': {'version': 'anti-chase-v1', 'as_of_date': '2026-10-19',
                     'blocked': False, 'gate_passed': True, 'status': 'clear', 'reasons': [],
                     'metrics': {'raw_price_complete': True, 'benchmark_aligned': True,
@@ -82,8 +85,12 @@ class WatchlistTests(unittest.TestCase):
         while len(dates)<120:
             if end.weekday()<5:dates.append(end.isoformat())
             end-=dt.timedelta(days=1)
-        return {'bars':[{'date':day,'open':10,'high':10.1,'low':9.9,'close':10,
-                         'raw_close':10,'volume':100000} for day in reversed(dates)]}
+        bars = [{'date': day, 'open': 10, 'high': 10.1, 'low': 9.7, 'close': 10,
+                 'raw_close': 10, 'volume': 100000} for day in reversed(dates)]
+        if symbol != 'sh000001':
+            for row, close in zip(bars[-6:], [9.8, 9.84, 9.88, 9.92, 9.96, 10]):
+                row['close'] = close
+        return {'bars': bars}
 
     def dashboard(self, target):
         self.calls.append(target)
@@ -123,22 +130,159 @@ class WatchlistTests(unittest.TestCase):
             self.assertTrue(all(item[key] is None for key in watch.PRICE_FIELDS))
         self.assertTrue(any('尚未完整核验' in warning for warning in result['warnings']))
 
-    def test_fixed_composite_uses_complete_financial_pool_and_not_failed_predictions(self):
+    def test_fixed_composite_uses_complete_financial_pool_without_positive_prediction_bonus(self):
         result = self.build()
         self.assertEqual(self.symbols(result)[0], 'sh600005')
         self.assertNotIn('sh600006', self.symbols(result))
         self.assertEqual(result['top_pick']['components']['technical_raw'],85)
-        self.assertAlmostEqual(result['top_pick']['score'], .6 * result['top_pick']['components']['technical'] + .4 * 80)
+        self.assertEqual(result['top_pick']['score'], round(.6 * result['top_pick']['components']['technical'] + .4 * 80, 3))
         for stock in self.stocks:
-            stock['prediction']['expected_return_pct'] *= -100
+            stock['prediction']['expected_return_pct'] *= 100
         self.assertEqual(self.symbols(result), self.symbols(self.build()))
+
+    def test_short_model_is_only_a_current_negative_veto_never_a_validation_promotion(self):
+        original = copy.deepcopy(self.stocks[5]['prediction'])
+        changes = ({'available': False}, {'model_version': 'ridge-old'},
+                   {'validation_protocol': 'old-protocol'}, {'target_kind': 'close_to_close_reference'},
+                   {'as_of_date': '2026-10-16'}, {'as_of_date': '2026-10-20'},
+                   {'expected_return_pct': None}, {'expected_return_pct': True},
+                   {'expected_return_pct': float('nan')}, {'expected_return_pct': float('inf')},
+                   {'expected_return_pct': -1}, {'expected_return_pct': 0},
+                   {'expected_return_pct': watch.forecast.ROUND_TRIP_COST_STRESS_PCT})
+        for change in changes:
+            with self.subTest(change=change):
+                self.stocks[5]['prediction'] = dict(original, **change)
+                result = self.build()
+                self.assertNotIn('sh600005', self.symbols(result))
+                self.assertEqual(sum(count for reason, count in result['coverage']['excluded_counts'].items()
+                                     if reason.startswith('short_model_')), 1)
+        self.stocks[5]['prediction'] = original
+        result = self.build()
+        self.assertEqual(result['ranking_policy'], 'short-confirmation-observation-v3')
+        for item in result['items']:
+            self.assertTrue(watch._valid_short_confirmation(item['short_confirmation'], '2026-10-19'))
+            self.assertFalse(item['eligible']); self.assertFalse(item['actionable']); self.assertFalse(item['model_validated'])
+            self.assertTrue(all(item[key] is None for key in watch.PRICE_FIELDS))
+        self.assertFalse(self.stocks[5]['prediction']['eligible'])
+
+    def test_short_confirmation_recomputes_six_prefix_prices_and_ignores_future_rows(self):
+        stock = copy.deepcopy(self.stocks[5])
+        bars, index = self.history('sh600005')['bars'], self.history('sh000001')['bars']
+        original = copy.deepcopy((stock, bars, index))
+        evidence, failure = watch._short_confirmation(stock, bars, index, '2026-10-19')
+        self.assertIsNone(failure)
+        self.assertEqual(evidence['session_dates'], [row['date'] for row in bars[-6:]])
+        self.assertEqual(evidence['stock_closes'], [9.8, 9.84, 9.88, 9.92, 9.96, 10])
+        self.assertEqual(evidence['benchmark_closes'], [10] * 6)
+        self.assertAlmostEqual(evidence['ma5'], (9.84 + 9.88 + 9.92 + 9.96 + 10) / 5)
+        self.assertAlmostEqual(evidence['stock_return_5d_pct'], (10 / 9.8 - 1) * 100)
+        self.assertEqual(evidence['relative_return_5d_pct'], evidence['stock_return_5d_pct'])
+        future = dict(bars[-1], date='2026-10-20', close=1000000)
+        self.assertEqual((evidence, failure), watch._short_confirmation(stock, bars + [future], index + [future], '2026-10-19'))
+        self.assertEqual((stock, bars, index), original)
+
+    def test_short_direction_requires_ma5_positive_return_and_index_relative_confirmation(self):
+        stock, target = self.stocks[5], '2026-10-19'
+        bars, index = self.history('sh600005')['bars'], self.history('sh000001')['bars']
+        cases = (([9.8, 10.8, 10.7, 10.6, 10.5, 10], [10] * 6, 'short_below_ma5'),
+                 ([10, 9.8, 9.8, 9.8, 9.8, 10], [10] * 6, 'short_nonpositive_return_5d'),
+                 ([10.2, 9.8, 9.8, 9.8, 9.8, 10], [10] * 6, 'short_nonpositive_return_5d'),
+                 ([9.8, 9.84, 9.88, 9.92, 9.96, 10], [10, 10.1, 10.2, 10.3, 10.4, 10.5], 'short_relative_weakness'))
+        for prices, index_prices, expected in cases:
+            with self.subTest(expected=expected):
+                left, right = copy.deepcopy(bars), copy.deepcopy(index)
+                for row, value in zip(left[-6:], prices): row['close'] = value
+                for row, value in zip(right[-6:], index_prices): row['close'] = value
+                self.assertEqual(watch._short_confirmation(stock, left, right, target), (None, expected))
+        evidence, failure = watch._short_confirmation(stock, bars, bars, target)
+        self.assertIsNone(failure)
+        self.assertEqual(evidence['relative_return_5d_pct'], 0)
+        # Equality at MA5 is allowed when the five-session return is positive.
+        flat = copy.deepcopy(bars)
+        for row in flat[-5:]: row['close'] = 10
+        evidence, failure = watch._short_confirmation(stock, flat, index, target)
+        self.assertIsNone(failure)
+        self.assertEqual(evidence['ma5'], evidence['stock_closes'][-1])
+
+    def test_short_confirmation_requires_actual_complete_aligned_sessions_and_finite_prices(self):
+        stock, target = self.stocks[5], '2026-10-19'
+        bars, index = self.history('sh600005')['bars'], self.history('sh000001')['bars']
+        changes = ('missing_stock', 'missing_benchmark', 'shared_gap', 'duplicate', 'wrong_target', 'nan', 'bool')
+        for case in changes:
+            with self.subTest(case=case):
+                left, right = copy.deepcopy(bars), copy.deepcopy(index)
+                if case == 'missing_stock': left.pop(-2)
+                elif case == 'missing_benchmark': right.pop(-2)
+                elif case == 'shared_gap': left.pop(-2); right.pop(-2)
+                elif case == 'duplicate': left[-2]['date'] = left[-1]['date']
+                elif case == 'wrong_target': left.pop(); right.pop()
+                elif case == 'nan': left[-2]['close'] = float('nan')
+                elif case == 'bool': right[-1]['close'] = True
+                self.assertEqual(watch._short_confirmation(stock, left, right, target), (None, 'short_price_evidence_missing'))
+
+    def test_short_confirmation_exclusion_counts_do_not_fill_an_empty_pool(self):
+        for stock in self.stocks:
+            stock['prediction']['expected_return_pct'] = -.1
+        result = self.build()
+        self.assertEqual(result['status'], 'insufficient_data')
+        self.assertEqual(result['items'], [])
+        self.assertIsNone(result['top_pick'])
+        self.assertEqual(result['coverage']['excluded_counts']['short_model_not_above_cost'], len(self.stocks))
+        self.assertEqual(result['coverage']['selected'], 0)
+
+    def test_short_evidence_archive_recomputes_every_condition_before_release(self):
+        prepared = watch.publish(service=self.service, now=self.moment.replace(hour=8))
+        key = watch.KEY_PREFIX + '2026-10-20'
+        missing = types.SimpleNamespace(dashboard=lambda target: {'stocks': [], 'index': {'date': target}}, longterm=lambda: {})
+        mutations = (lambda proof: proof.update(model_version='old'),
+                     lambda proof: proof.update(validation_protocol='old'),
+                     lambda proof: proof.update(target_kind='close_to_close_reference'),
+                     lambda proof: proof.update(as_of_date='2026-10-20'),
+                     lambda proof: proof.update(expected_return_pct=.3),
+                     lambda proof: proof.update(round_trip_cost_stress_pct=0),
+                     lambda proof: proof.update(ma5=proof['ma5'] + .001),
+                     lambda proof: proof.update(stock_return_5d_pct=0),
+                     lambda proof: proof.update(benchmark_return_5d_pct=1),
+                     lambda proof: proof.update(relative_return_5d_pct=100),
+                     lambda proof: proof['stock_closes'].__setitem__(0, float('nan')),
+                     lambda proof: proof['benchmark_closes'].__setitem__(5, True),
+                     lambda proof: proof['session_dates'].__setitem__(4, proof['session_dates'][3]),
+                     lambda proof: proof.update(extra_field=True))
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                changed = copy.deepcopy(prepared)
+                mutate(changed['items'][0]['short_confirmation'])
+                self.put(key, changed)
+                result = watch.publish(service=missing, now=self.moment)
+                self.assertEqual(result['status'], 'insufficient_data')
+                self.assertIsNone(result['published_at'])
+        self.put(key, prepared)
+        released = watch.publish(service=missing, now=self.moment)
+        self.assertEqual(released['items'], prepared['items'])
+        self.assertEqual(released['release_basis'], 'prepared_cohort_frozen_at_release')
+
+    def test_new_short_policy_never_rewrites_or_vetoes_an_already_published_old_cohort(self):
+        saved = watch.publish(service=self.service, now=self.moment)
+        saved['ranking_policy'] = 'risk-aware-observation-v2'
+        for item in saved['items']: item.pop('short_confirmation')
+        saved['top_pick'] = saved['items'][0]
+        self.put(watch.KEY_PREFIX + saved['date'], saved)
+        for stock in self.stocks:
+            stock['prediction'].update(available=False, expected_return_pct=-10)
+            stock['score'] = 0
+        current = watch.publish(service=self.service, now=self.moment + dt.timedelta(minutes=1))
+        self.assertEqual(current['ranking_policy'], saved['ranking_policy'])
+        self.assertEqual(current['items'], saved['items'])
+        self.assertEqual(current['published_at'], saved['published_at'])
+        self.assertEqual(current['alerts'], saved['alerts'])
+        self.assertEqual(current['withdrawn_symbols'], saved['withdrawn_symbols'])
 
     def test_missing_financial_never_gets_filled_neutral_score(self):
         self.finance['stocks'] = self.finance['stocks'][:1]
         result = self.build()
         incomplete = next(item for item in result['items'] if not item['verification']['financial_complete'])
         self.assertIsNone(incomplete['components']['financial'])
-        self.assertAlmostEqual(incomplete['score'], .6 * incomplete['components']['technical'])
+        self.assertEqual(incomplete['score'], round(.6 * incomplete['components']['technical'], 3))
         self.assertTrue(any('较低' in note for note in incomplete['risk_notes']))
 
     def test_hard_veto_stale_index_st_excluded_suspension_and_chase(self):
@@ -283,6 +427,7 @@ class WatchlistTests(unittest.TestCase):
             stock.update(date='2026-10-23', fetched_at=close.isoformat())
             stock['chase_risk']['as_of_date'] = '2026-10-23'
             stock['chase_risk']['entry_ceiling']['reference_date'] = '2026-10-23'
+            stock['prediction']['as_of_date'] = '2026-10-23'
         for row in self.finance['stocks']:
             row.update(date='2026-10-23', quote_date='2026-10-23')
         self.finance.update(as_of='2026-10-23', fetched_at=close.isoformat())
@@ -772,6 +917,9 @@ class WatchlistTests(unittest.TestCase):
 
     def test_risk_profile_uses_only_aligned_prefix_and_liquidity_lots(self):
         bars=self.history('sh600000')['bars'];index=copy.deepcopy(bars)
+        for row in bars:
+            row.update(close=10, low=9.9)
+        index=copy.deepcopy(bars)
         profile=watch._risk_profile(bars,index,'2026-10-19')
         self.assertEqual(profile['risk_penalty'],4)
         self.assertEqual(profile['liquidity_proxy_20d_cny'],100000000)

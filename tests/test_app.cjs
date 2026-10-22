@@ -30,8 +30,8 @@ test('an unqualified observation can be visible without becoming a formal buy or
   assert.equal(a.get('watchlist-body').children.length,1);assert.equal(a.get('watch-priority-name').textContent,'观察样本 · 600000.SH');assert.equal(a.get('watch-priority-score').textContent,'73.5 / 100');
   assert.equal(a.ui.state.topPick,null);assert.equal(a.ui.shortEligible(data.items[0]),false);assert.equal(a.get('pick-metrics').hidden,true);
   const displayed=a.get('watchlist-body').textContent+a.get('watch-priority-reason').textContent;for(const price of ['9876.54','9999.99','8765.43','12345.67'])assert(!displayed.includes(price));
-  assert.match(a.get('watchlist-body').textContent,/仅观察 · 未通过正式买入验证/);assert.match(a.get('watchlist-summary').textContent,/不提供未经验证的买卖价位/);
-  assert.match(a.get('watch-priority-verification').textContent,/公告未完成完整核验/);assert.match(a.get('watch-priority-verification').textContent,/AI未完成完整核验/);assert.match(a.get('watch-priority-verification').textContent,/未核验不代表安全/);
+  assert.doesNotMatch(a.get('watchlist-body').textContent,/未通过正式买入验证|非买入信号/);assert.equal(a.get('watchlist-summary').textContent,'1 只 · 综合排序');assert.equal(a.get('top-pick').hidden,true);
+  assert.match(a.get('watch-priority-verification').textContent,/公告待补充.*停复牌待补充.*AI待补充/);
 });
 test('observation dates distinguish the assigned day, previous close, actual generation and a late release',()=>{
   const a=app({now:WATCH_NOW});a.ui.renderDailyWatchlist(watchlist({publication_timing:'late',late:true,published_at:'2026-10-20T09:12:00+08:00'}));
@@ -61,7 +61,7 @@ test('a genuine static gateway preparation reaches the app at nine without inven
       assert.equal(a.get('watch-priority-name').textContent,'观察样本 · 600000.SH');
       assert.match(a.get('watchlist-dates').textContent,/实际发布：尚未发布.*客户端揭榜/);
       assert.match(a.get('watchlist-alert').textContent,/服务器实际发布时间仍为空/);
-      assert.match(a.get('watchlist-summary').textContent,/服务器尚未发布/);
+      assert.equal(a.get('watchlist-summary').textContent,'1 只 · 综合排序');
       assert.equal(gated.items[0].entry_low,null);assert.equal(a.ui.shortEligible(gated.items[0]),false);
       gated.snapshot_transport.mode='offline';a.ui.renderDailyWatchlist(gated);assert.equal(a.get('watchlist-body').children.length,1);
       assert.match(a.get('watchlist-alert').textContent,/离线观察记录/);
@@ -102,7 +102,7 @@ test('old and selected historical observations never acquire today labels or sub
 });
 test('withdrawing the immutable original first observation never promotes a runner-up',()=>{
   const a=app({now:WATCH_NOW}),data=watchlist(),second={...data.items[0],symbol:'sh600001',name:'第二观察'};data.items.push(second);data.withdrawn_symbols=['sh600000'];data.alerts=[{symbol:'sh600000',reason:'新增风险公告',withdrawn:true}];a.ui.renderDailyWatchlist(data);
-  assert.match(a.get('watch-priority-name').textContent,/原最优先观察股已撤销/);assert.doesNotMatch(a.get('watch-priority-name').textContent,/第二观察/);assert.equal(a.get('watch-priority-metrics').hidden,true);assert.equal(a.get('watchlist-body').children.length,2);assert.match(a.get('watchlist-body').children[0].textContent,/已撤销观察/);assert.match(a.get('watchlist-alert').textContent,/新增风险公告/);
+  assert.match(a.get('watch-priority-name').textContent,/今日首选已撤销/);assert.doesNotMatch(a.get('watch-priority-name').textContent,/第二观察/);assert.equal(a.get('watch-priority-metrics').hidden,true);assert.equal(a.get('watchlist-body').children.length,2);assert.match(a.get('watchlist-body').children[0].textContent,/已撤销/);assert.match(a.get('watchlist-alert').textContent,/新增风险公告/);
 });
 test('observation names, reasons and risks render only as text and absent finance stays unverified',()=>{
   const a=app({now:WATCH_NOW}),data=watchlist(),attack='<img src=x onerror=alert(1)>';data.items[0].name=attack;data.items[0].reasons=[attack];data.items[0].risk_notes=[attack];data.items[0].components.financial=null;a.ui.renderDailyWatchlist(data);
@@ -123,14 +123,14 @@ test('late latest-watchlist responses cannot overwrite a newer selected historic
   pending[1](historical);await second;pending[0](watchlist());await first;
   assert.deepEqual(paths,['/api/daily-watchlist','/api/daily-watchlist?date=2026-10-19']);assert.equal(a.ui.state.dailyWatchlist.date,'2026-10-19');assert.match(a.get('watchlist-title').textContent,/2026-10-19.*历史记录/);
 });
-test('today observation date is prominent while the completed market date stays truthful and secondary',()=>{
+test('today recommendation retains its small assigned date while source dates remain truthful',()=>{
   const now=Date.parse('2026-10-21T14:30:00+08:00'),a=app({now});
   const data={meta:{data_date:'2026-10-20',report_date:'2026-10-20',snapshot_transport:{mode:'live',generated_at:'2026-10-21T14:00:00+08:00'}},index:{date:'2026-10-20'},stocks:[]};
   a.ui.state.dashboard=data;a.ui.renderDashboard(data);
-  assert.equal(a.get('recommendation-date').textContent,'2026-10-21');assert.match(a.get('recommendation-date-label').textContent,/今日观察/);
+  assert.equal(a.get('recommendation-date').textContent,'2026-10-21');assert.equal(a.get('recommendation-date-label').textContent,'北京时间');
   assert.match(a.get('research-dates').textContent,/行情日期：2026-10-20/);assert.equal(a.get('history-date').value,'');
   a.ui.state.historyDate='2026-10-20';a.ui.renderDashboard(data);
-  assert.equal(a.get('recommendation-date').textContent,'2026-10-20');assert.match(a.get('recommendation-date-label').textContent,/历史观察/);
+  assert.equal(a.get('recommendation-date').textContent,'2026-10-20');assert.match(a.get('recommendation-date-label').textContent,/历史推荐/);
   assert.equal(data.meta.data_date,'2026-10-20');assert.equal(data.index.date,'2026-10-20');
 });
 test('a current completed snapshot labels its two missing stocks without changing stale or eligibility',()=>{
@@ -179,13 +179,36 @@ test('a new close never relabels the frozen daily cohort when dashboard and watc
 test('compact observation presentation keeps key gaps and withdrawal visible with full risk details retained',()=>{
   const a=app({now:WATCH_NOW}),data=watchlist();data.items[0].verification.financial_complete=false;
   a.ui.renderDailyWatchlist(data);
-  assert.equal(a.get('watchlist-gap').hidden,false);assert.match(a.get('watchlist-gap').textContent,/公告覆盖待核验.*停复牌待核验.*AI复核未完整.*财务证据不足/);
-  const row=a.get('watchlist-body').children[0];assert.equal(row.children[4].children[1].tag,'details');assert.match(row.textContent,/公告与AI未完整核验/);
+  assert.equal(a.get('watchlist-gap').hidden,false);assert.equal(a.get('watchlist-gap').textContent,'1只财务待补充');assert.match(a.get('watchlist-verification').textContent,/公告待补充.*停复牌待补充.*AI待补充/);
+  const row=a.get('watchlist-body').children[0];assert.equal(row.children[4].children[0].tag,'details');assert.match(row.textContent,/公告与AI未完整核验/);
   data.items[0].verification.financial_quality_available=true;a.ui.renderDailyWatchlist(data);
-  assert.match(a.get('watchlist-body').textContent,/财务质量.*估值待核验/);assert.match(a.get('watchlist-gap').textContent,/估值待核验/);assert.doesNotMatch(a.get('watchlist-gap').textContent,/财务证据不足/);
-  data.withdrawn_symbols=[data.items[0].symbol];a.ui.renderDailyWatchlist(data);assert.match(a.get('watchlist-gap').textContent,/已撤销观察/);
+  assert.match(a.get('watchlist-body').textContent,/财务质量.*估值待核验/);assert.match(a.get('watchlist-gap').textContent,/估值待补充/);assert.doesNotMatch(a.get('watchlist-gap').textContent,/财务待补充/);
+  data.withdrawn_symbols=[data.items[0].symbol];a.ui.renderDailyWatchlist(data);assert.match(a.get('watchlist-gap').textContent,/已撤销/);
   const html=fs.readFileSync(path.join(__dirname,'../../ashare-platform/static/index.html'),'utf8');
-  assert.match(html,/<details[^>]*id="watchlist-details"/);assert.match(html,/<details[^>]*id="market-research-details"/);assert.equal((html.match(/class="important-note"/g)||[]).length,1);
+  assert.match(html,/<details[^>]*id="watchlist-details"/);assert.match(html,/<details[^>]*id="market-research-details"/);assert.equal((html.match(/class="important-note"/g)||[]).length,0);
+});
+test('recommendations lead the page, dates stay small at the right and the empty certified card is absent',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../../ashare-platform/static/index.html'),'utf8');
+  const overview=html.slice(html.indexOf('<section id="view-overview"'),html.indexOf('<section id="view-longterm"'));
+  assert(overview.indexOf('id="daily-watchlist-panel"')<overview.indexOf('id="market-brief-panel"'));
+  assert(overview.indexOf('id="watch-priority-name"')<overview.indexOf('id="history-date"'));
+  assert.match(overview,/<h1 id="watchlist-title">今日推荐<\/h1>.*class="recommendation-meta"[^]*?<time id="recommendation-date">/);
+  assert.doesNotMatch(overview,/recommendation-day|观察名单未通过|仅观察 · 非买入信号|暂无经过验证的首选/);
+  assert.match(overview,/<article class="top-pick" id="top-pick" hidden>/);
+  const a=app({now:WATCH_NOW}),data=watchlist(),original=structuredClone(data);
+  a.ui.state.connected=true;a.ui.state.dashboard={meta:{mode:'manual_research'},stocks:[]};a.ui.renderTopPick([]);a.ui.renderDailyWatchlist(data);
+  assert.equal(a.get('watch-priority-label').textContent,'今日首选');assert.equal(a.get('watchlist-title').textContent,'今日推荐');
+  assert.equal(a.get('watch-priority-name').textContent,'观察样本 · 600000.SH');assert.equal(a.get('top-pick').hidden,true);
+  assert.equal(a.get('recommendation-status').hidden,true);assert.deepEqual(data,original);assert.equal(a.ui.shortEligible(data.items[0]),false);
+});
+test('a concise recommendation keeps concrete risk and offline records while removing repeated certification text',()=>{
+  const a=app({now:WATCH_NOW}),data=watchlist();
+  data.items[0].risk_notes.push('近3日涨幅偏快，避免追价');data.items[0].verification.financial_complete=true;
+  data.snapshot_transport={mode:'offline'};data.warnings=['短线模型验证未作为本观察榜的合格买入依据','实报有两页暂不可读'];
+  const original=structuredClone(data);a.ui.renderDailyWatchlist(data);
+  assert.match(a.get('watchlist-body').textContent,/近3日涨幅偏快，避免追价/);assert.match(a.get('watchlist-alert').textContent,/实报有两页暂不可读|离线观察记录/);
+  assert.equal(a.get('watchlist-gap').textContent,'离线记录');assert.doesNotMatch(a.get('watchlist-body').textContent+a.get('watchlist-alert').textContent,/未通过正式买入验证|短线模型验证未作为/);
+  assert.deepEqual(data,original);
 });
 function marketBrief(overrides={}){
   const item={id:'one',title:'央行公布公开政策信息',url:'https://www.pbc.gov.cn/example.html',source:'中国人民银行',published_at:'2026-10-20T08:10:00+08:00',published_precision:'minute',collected_at:'2026-10-20T08:12:00+08:00',importance:'high',importance_reason:'公开政策信息',topics:['政策'],impact:'policy',scope:'官方标题核验'};
@@ -213,11 +236,17 @@ test('only valid important news leads the default three, retaining true dates an
   const original=structuredClone(data);a.ui.renderMarketBrief(data);
   assert.deepEqual(a.get('market-brief-items').children.map(row=>row.children[0].textContent),['此前资本市场公告','此前货币政策公告','普通最新标题']);
   assert.equal(a.get('market-brief-extra').children[0].children[0].textContent,'普通稍早标题');
-  assert.match(a.get('market-brief-items').children[0].textContent,/10.?19/);assert.match(a.get('market-brief-items').textContent,/标题涉及资本市场/);
+  assert.match(a.get('market-brief-items').children[0].textContent,/10.?19/);assert.doesNotMatch(a.get('market-brief-items').textContent,/标题涉及资本市场/);
   assert.doesNotMatch(a.get('market-brief-items').textContent+a.get('market-brief-extra').textContent,/供背景阅读|无效未来重要消息/);
   assert.match(a.get('market-brief-gap').textContent,/1条消息缺少有效日期或来源时间/);assert.deepEqual(data,original);
   const generic=marketBrief();generic.items[0].importance_reason='官方近期财经标题，供背景阅读。';a.ui.renderMarketBrief(generic);
   assert.equal(a.get('market-brief-items').children[0].children.filter(child=>child.tag==='p').length,0);
+});
+test('news keeps actual source failures visible without repeating generic method notes in the main column',()=>{
+  const a=app({now:WATCH_NOW}),data=marketBrief();data.warnings=['仅按官方标题和固定主题规则选取，重要性不是利好/利空评分，不推断受益股。'];
+  a.ui.renderMarketBrief(data);assert.equal(a.get('market-brief-gap').hidden,true);assert.match(a.get('market-brief-warnings').textContent,/仅按官方标题/);
+  data.coverage=[{source:'交易所',status:'error',count:0}];a.ui.renderMarketBrief(data);
+  assert.equal(a.get('market-brief-gap').hidden,false);assert.equal(a.get('market-brief-gap').textContent,'来源缺口：交易所');
 });
 test('important news is text-only and invalid links or future observations never become trusted items',()=>{
   const a=app({now:WATCH_NOW}),data=marketBrief(),attack='<img src=x onerror=alert(1)>';

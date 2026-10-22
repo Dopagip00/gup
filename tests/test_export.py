@@ -15,6 +15,42 @@ spec=importlib.util.spec_from_file_location('export_static',Path(__file__).resol
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
 class PublicationTests(unittest.TestCase):
+    def short_confirmation(self):
+        stock=[10,10.1,10.2,10.3,10.4,10.5];index=[100,100.2,100.4,100.6,100.8,101]
+        r5=(stock[-1]/stock[0]-1)*100;b5=(index[-1]/index[0]-1)*100
+        return {'protocol':'short-confirmation-v1','model_version':'ridge-cycle-v3',
+            'validation_protocol':'purged-expanding-3x60-decision-v1','target_kind':'next_open_to_following_close',
+            'as_of_date':'2026-10-20','expected_return_pct':.6,'round_trip_cost_stress_pct':.30,
+            'session_dates':['2026-10-13','2026-10-14','2026-10-15','2026-10-16','2026-10-19','2026-10-20'],
+            'stock_closes':stock,'benchmark_closes':index,'ma5':sum(stock[-5:])/5,
+            'stock_return_5d_pct':r5,'benchmark_return_5d_pct':b5,'relative_return_5d_pct':r5-b5}
+
+    def test_short_direction_evidence_is_preserved_without_promoting_or_exporting_extra_fields(self):
+        confirmation=self.short_confirmation();confirmation['private']='PRIVATE'
+        row={'symbol':'sh600001','asof':'2026-10-20','short_confirmation':confirmation,'eligible':True,'entry_low':12}
+        source={'date':'2026-10-21','data_date':'2026-10-20','ranking_policy':'short-confirmation-observation-v3','items':[row]}
+        original=copy.deepcopy(source);result=module.public_watchlist(source)
+        actual=result['items'][0]['short_confirmation']
+        self.assertEqual(set(actual),module.SHORT_CONFIRMATION_KEYS)
+        self.assertEqual(actual['session_dates'],confirmation['session_dates'])
+        self.assertEqual(actual['expected_return_pct'],.6)
+        self.assertNotIn('PRIVATE',json.dumps(result));self.assertFalse(result['items'][0]['eligible'])
+        self.assertIsNone(result['items'][0]['entry_low']);self.assertEqual(source,original)
+
+    def test_short_direction_export_rejects_false_model_future_dates_and_inconsistent_arithmetic(self):
+        original=self.short_confirmation()
+        for change in ({'model_version':'old'},{'as_of_date':'2026-10-21'},
+                {'session_dates':original['session_dates'][:-1]+['2026-10-21']},
+                {'session_dates':[original['session_dates'][0]]*6},
+                {'expected_return_pct':.30},{'expected_return_pct':float('nan')},
+                {'round_trip_cost_stress_pct':0},{'ma5':100},
+                {'relative_return_5d_pct':9},{'stock_closes':[10]*6},
+                {'benchmark_closes':[100,100,100,100,100,120]}):
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                module._public_short_confirmation({**original,**change},'2026-10-20')
+        with self.assertRaises(ValueError):
+            module.public_watchlist({'ranking_policy':'short-confirmation-observation-v3','items':[{'symbol':'sh600001'}]})
+
     def test_new_ranking_evidence_preserves_old_financial_date_and_risk_components(self):
         source={'protocol':'daily-observation-v1','date':'2026-10-21','data_date':'2026-10-20',
             'ranking_policy':'risk-aware-observation-v2','items':[{'symbol':'sh600001','components':{

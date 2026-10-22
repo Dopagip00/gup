@@ -18,6 +18,40 @@ META_KEYS = {'app_name','now','status','last_success','data_date','report_date',
 
 QUOTE_EVIDENCE_KEYS = {'quote_basis','quote_date','price_reference_date','quote_consistent',
                        'quote_source','quote_datetime','quote_fetched_at','previous_close'}
+SHORT_CONFIRMATION_KEYS = {'protocol','model_version','validation_protocol','target_kind','as_of_date',
+    'expected_return_pct','round_trip_cost_stress_pct','session_dates','stock_closes','benchmark_closes',
+    'ma5','stock_return_5d_pct','benchmark_return_5d_pct','relative_return_5d_pct'}
+
+
+def _public_short_confirmation(raw, data_date):
+    """Export only the reproducible, dated direction check, never a buy flag."""
+    if not isinstance(raw, dict) or not SHORT_CONFIRMATION_KEYS <= raw.keys():
+        raise ValueError('短线方向证据不完整')
+    value = {key:copy.deepcopy(raw[key]) for key in SHORT_CONFIRMATION_KEYS}
+    number = lambda x:type(x) in (int,float) and math.isfinite(x)
+    if (value['protocol'] != 'short-confirmation-v1' or value['model_version'] != 'ridge-cycle-v3'
+            or value['validation_protocol'] != 'purged-expanding-3x60-decision-v1'
+            or value['target_kind'] != 'next_open_to_following_close' or value['as_of_date'] != data_date
+            or not number(value['expected_return_pct']) or not number(value['round_trip_cost_stress_pct'])
+            or value['round_trip_cost_stress_pct'] != .30 or value['expected_return_pct'] <= .30):
+        raise ValueError('短线模型日期、协议或成本方向不一致')
+    dates = value['session_dates']
+    if (not isinstance(dates,list) or len(dates)!=6 or any(not isinstance(day,str) for day in dates)
+            or sorted(set(dates))!=dates or dates[-1]!=data_date
+            or any(dt.date.fromisoformat(day).isoformat()!=day for day in dates)):
+        raise ValueError('短线方向交易日证据错误')
+    for key in ('stock_closes','benchmark_closes'):
+        if not isinstance(value[key],list) or len(value[key])!=6 or any(not number(x) or x<=0 for x in value[key]):
+            raise ValueError('短线方向价格证据错误')
+    stock, index = value['stock_closes'],value['benchmark_closes']
+    ma5=sum(stock[-5:])/5
+    r5=(stock[-1]/stock[0]-1)*100
+    b5=(index[-1]/index[0]-1)*100
+    derived={'ma5':ma5,'stock_return_5d_pct':r5,'benchmark_return_5d_pct':b5,'relative_return_5d_pct':r5-b5}
+    if (stock[-1]<ma5 or r5<=0 or r5-b5<0 or any(not number(value[key])
+            or not math.isclose(value[key],expected,rel_tol=1e-9,abs_tol=1e-9) for key,expected in derived.items())):
+        raise ValueError('短线方向算数或相对强度不一致')
+    return value
 
 
 def _quote_instant(value):
@@ -92,6 +126,10 @@ def public_watchlist(value):
         return projected
     def item(raw):
         row={key:copy.deepcopy(raw[key]) for key in item_keys if key in raw}
+        if 'short_confirmation' in raw:
+            row['short_confirmation']=_public_short_confirmation(raw['short_confirmation'],value.get('data_date'))
+        elif value.get('ranking_policy')=='short-confirmation-observation-v3':
+            raise ValueError('新版榜单缺少短线方向证据')
         row['verification']=verification(raw.get('verification'), value.get('generated_at'))
         components=raw.get('components',{})
         row['components']={key:copy.deepcopy(components[key]) for key in ('technical','financial','atr_pct','return_5d_pct','ma20_deviation_pct',

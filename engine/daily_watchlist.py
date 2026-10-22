@@ -16,12 +16,14 @@ from urllib.parse import urlsplit
 
 import core
 import daily_plan
+import forecast
 import market_data as md
 
 PROTOCOL = 'daily-observation-v1'
 KEY_PREFIX = 'daily_watchlist:'
 TECHNICAL_WEIGHT, FINANCIAL_WEIGHT = .60, .40
-RANKING_POLICY = 'risk-aware-observation-v2'
+RANKING_POLICY = 'short-confirmation-observation-v3'
+SHORT_CONFIRMATION_PROTOCOL = 'short-confirmation-v1'
 SYMBOL = re.compile(r'sh(?:60[0135]|68[89])\d{3}')
 PRICE_FIELDS = ('entry_low', 'entry_high', 'stop_loss', 'take_profit', 'max_position_pct')
 
@@ -63,7 +65,7 @@ def _base(day, moment):
             'model_validated': False, 'actionable': False, 'eligible': False, 'items': [], 'top_pick': None,
             'alerts': [], 'withdrawn_symbols': [], 'coverage': {}, 'verification': {}, 'warnings': [],
             'ranking_policy': RANKING_POLICY,
-            'method': '证据顺序为完整同日财务、历史已披露质量、财务缺失；固定60%风险调整技术分+40%财务分。质量分不用旧PE/PB或旧总分；技术扣分仅用截止日前60日下行波动/回撤、ATR和20日流动性代理。未验证收益优势，不使用失败模型的预期涨幅。',
+            'method': '先核短线方向：当前两日点估计大于固定成本压力，收盘不低于MA5、五期涨幅为正且不弱于沪指；点估计仅作负向否决，不加分或提升模型资格。证据顺序仍为完整同日财务、历史已披露质量、财务缺失；固定60%风险调整技术分+40%财务分。',
             'scope': '仅供比较的优选观察榜，未通过短线模型验证，不提供入场、止损、止盈或仓位指令；排名不是上涨概率或收益保证。'}
 
 
@@ -234,6 +236,108 @@ def _risk_profile(bars, benchmark, target):
             'risk_penalty':_risk_penalty(atr,downside,drawdown,liquidity,regime),
             'window_start':rows[0]['date'],'window_end':target,'return_samples':60,
             'reference_close':rows[-1]['close'],'reference_raw_close':rows[-1]['raw_close']}
+
+
+def _short_window(bars, target):
+    if not isinstance(bars, list):
+        return None
+    rows = [row for row in bars if isinstance(row, dict) and isinstance(row.get('date'), str) and row['date'] <= target]
+    dates = [row['date'] for row in rows]
+    if len(rows) < 6 or dates != sorted(set(dates)) or dates[-1] != target:
+        return None
+    rows = rows[-6:]
+    try:
+        for row in rows:
+            _day(row['date'])
+    except (TypeError, ValueError):
+        return None
+    if any(not _number(row.get('close'), positive=True) for row in rows):
+        return None
+    return rows
+
+
+def _short_values(dates, stock_closes, benchmark_closes, target):
+    """Recompute the frozen six-session confirmation, including calendar gaps."""
+    if (not isinstance(dates, list) or not isinstance(stock_closes, list) or not isinstance(benchmark_closes, list)
+            or len(dates) != 6 or len(stock_closes) != 6 or len(benchmark_closes) != 6
+            or any(not isinstance(day, str) for day in dates) or dates != sorted(set(dates))
+            or dates[-1] != target
+            or any(not _number(value, positive=True) for value in stock_closes + benchmark_closes)):
+        return None
+    try:
+        for day in dates:
+            if _day(day) > _day(target) or not md.is_trading_day(day):
+                return None
+        for previous, following in zip(dates, dates[1:]):
+            prior = md.last_completed_session(dt.datetime.combine(_day(following), dt.time(9), core.TZ))
+            prior = prior.isoformat() if isinstance(prior, dt.date) else str(prior)
+            if previous != prior:
+                return None
+    except (md.MarketDataError, TypeError, ValueError):
+        return None
+    ma5 = mean(stock_closes[-5:])
+    stock_return = (stock_closes[-1] / stock_closes[0] - 1) * 100
+    benchmark_return = (benchmark_closes[-1] / benchmark_closes[0] - 1) * 100
+    values = {'ma5': ma5, 'stock_return_5d_pct': stock_return,
+              'benchmark_return_5d_pct': benchmark_return,
+              'relative_return_5d_pct': stock_return - benchmark_return}
+    return values if all(_number(value) for value in values.values()) else None
+
+
+def _short_confirmation(stock, bars, benchmark, target):
+    """A negative-only consistency veto; its estimate never enters the score."""
+    prediction = stock.get('prediction') if isinstance(stock, dict) else None
+    if (not isinstance(prediction, dict) or prediction.get('available') is not True
+            or prediction.get('model_version') != forecast.MODEL_VERSION
+            or prediction.get('validation_protocol') != forecast.VALIDATION_PROTOCOL
+            or prediction.get('target_kind') != 'next_open_to_following_close'
+            or prediction.get('as_of_date') != target
+            or not _number(prediction.get('expected_return_pct'))):
+        return None, 'short_model_evidence_missing'
+    if prediction['expected_return_pct'] <= forecast.ROUND_TRIP_COST_STRESS_PCT:
+        return None, 'short_model_not_above_cost'
+    stock_rows, index_rows = _short_window(bars, target), _short_window(benchmark, target)
+    if stock_rows is None or index_rows is None:
+        return None, 'short_price_evidence_missing'
+    dates = [row['date'] for row in stock_rows]
+    if dates != [row['date'] for row in index_rows]:
+        return None, 'short_price_evidence_missing'
+    closes, index_closes = [row['close'] for row in stock_rows], [row['close'] for row in index_rows]
+    values = _short_values(dates, closes, index_closes, target)
+    if values is None:
+        return None, 'short_price_evidence_missing'
+    if closes[-1] < values['ma5']:
+        return None, 'short_below_ma5'
+    if values['stock_return_5d_pct'] <= 0:
+        return None, 'short_nonpositive_return_5d'
+    if values['relative_return_5d_pct'] < 0:
+        return None, 'short_relative_weakness'
+    return {'protocol': SHORT_CONFIRMATION_PROTOCOL, 'model_version': forecast.MODEL_VERSION,
+            'validation_protocol': forecast.VALIDATION_PROTOCOL, 'target_kind': 'next_open_to_following_close',
+            'as_of_date': target, 'expected_return_pct': prediction['expected_return_pct'],
+            'round_trip_cost_stress_pct': forecast.ROUND_TRIP_COST_STRESS_PCT,
+            'session_dates': dates, 'stock_closes': closes, 'benchmark_closes': index_closes, **values}, None
+
+
+def _valid_short_confirmation(evidence, target):
+    keys = {'protocol', 'model_version', 'validation_protocol', 'target_kind', 'as_of_date',
+            'expected_return_pct', 'round_trip_cost_stress_pct', 'session_dates', 'stock_closes',
+            'benchmark_closes', 'ma5', 'stock_return_5d_pct', 'benchmark_return_5d_pct', 'relative_return_5d_pct'}
+    if (not isinstance(evidence, dict) or set(evidence) != keys
+            or evidence.get('protocol') != SHORT_CONFIRMATION_PROTOCOL
+            or evidence.get('model_version') != forecast.MODEL_VERSION
+            or evidence.get('validation_protocol') != forecast.VALIDATION_PROTOCOL
+            or evidence.get('target_kind') != 'next_open_to_following_close'
+            or evidence.get('as_of_date') != target
+            or not _number(evidence.get('expected_return_pct'))
+            or not _number(evidence.get('round_trip_cost_stress_pct'))
+            or evidence['round_trip_cost_stress_pct'] != forecast.ROUND_TRIP_COST_STRESS_PCT
+            or evidence['expected_return_pct'] <= forecast.ROUND_TRIP_COST_STRESS_PCT):
+        return False
+    values = _short_values(evidence.get('session_dates'), evidence.get('stock_closes'), evidence.get('benchmark_closes'), target)
+    return bool(values is not None and all(_number(evidence.get(key)) and abs(evidence[key] - value) <= 1e-9 for key, value in values.items())
+                and evidence['stock_closes'][-1] >= values['ma5']
+                and values['stock_return_5d_pct'] > 0 and values['relative_return_5d_pct'] >= 0)
 
 
 def observation_quote_evidence(stock, quote, snapshot, target, moment, *, observation_only=False, defer_auction=False):
@@ -429,12 +533,16 @@ def build(date=None, service=None, now=None, limit=5):
         financial_basis = ('same_session_complete' if complete else
                            'cached_disclosed_quality_without_valuation' if quality is not None else 'missing')
         try:
-            profile = _risk_profile(core.load_history(symbol).get('bars'), benchmark, target)
+            bars = core.load_history(symbol).get('bars')
+            profile = _risk_profile(bars, benchmark, target)
         except Exception:
             profile = None
         if (profile is None or abs(profile['reference_close']-stock['close'])>.0001
                 or abs(profile['reference_raw_close']-stock['raw_close'])>.0001):
             exclude('risk_history_missing'); continue
+        confirmation, short_failure = _short_confirmation(stock, bars, benchmark, target)
+        if confirmation is None:
+            exclude(short_failure); continue
         technical = round(max(0, stock['score'] - profile['risk_penalty']), 3)
         score = TECHNICAL_WEIGHT * technical + (FINANCIAL_WEIGHT * financial_score if financial_score is not None else 0)
         risk_reasons = risk.get('reasons') if isinstance(risk.get('reasons'), list) else []
@@ -454,6 +562,7 @@ def build(date=None, service=None, now=None, limit=5):
             risk_notes.append(f"年度ROE{record['roe']:.2f}%，资产负债率{record['debt_ratio']:.2f}%；营收/归母净利同比{record['revenue_growth']:+.2f}%/{record['profit_growth']:+.2f}%。")
         reasons = [f"原技术分{stock['score']:.1f}，固定风险扣分{profile['risk_penalty']:.2f}后{technical:.2f}；近5日{metrics['return_5d_pct']:+.2f}%，偏离MA20{metrics['ma20_deviation_pct']:+.2f}%。",
                    f"60日下行波动{profile['downside_deviation_60d_pct']:.2f}%，最大回撤{profile['max_drawdown_60d_pct']:.2f}%；市场状态{'防御' if profile['market_regime']=='defensive' else '正常'}。"]
+        reasons.append(f"收盘不低于5日均线，近5期{confirmation['stock_return_5d_pct']:+.2f}%，较沪指{confirmation['relative_return_5d_pct']:+.2f}个百分点。")
         if complete:
             reasons.append(f"已披露财务分{record['score']:.1f}；PE(TTM){record['pe_ttm']:.2f}，ROE{record['roe']:.2f}%。")
             reasons.append(f"营收/归母净利同比{record['revenue_growth']:+.2f}%/{record['profit_growth']:+.2f}%，经营现金流/净利{record['operating_cash_to_profit']:.2f}。")
@@ -484,6 +593,7 @@ def build(date=None, service=None, now=None, limit=5):
                                'return_5d_pct': metrics['return_5d_pct'],
                                'ma20_deviation_pct': metrics['ma20_deviation_pct']},
                 'reasons': reasons, 'risk_notes': list(dict.fromkeys(risk_notes)), 'verification': per_verification,
+                'short_confirmation': confirmation,
                 'model_validated': False, 'actionable': False, 'eligible': False,
                 **dict.fromkeys(PRICE_FIELDS)}
         pool.append(item)
@@ -738,6 +848,8 @@ def _archived_release(saved, moment, limit, service=None):
                 or components.get('weights') != {'technical': TECHNICAL_WEIGHT, 'financial': FINANCIAL_WEIGHT}):
             return None
         seen.add(symbol)
+        if not _valid_short_confirmation(item.get('short_confirmation'), target):
+            return None
         risk_keys=('technical_raw','risk_penalty','downside_deviation_60d_pct','max_drawdown_60d_pct','liquidity_proxy_20d_cny')
         if (any(not _number(components.get(key)) for key in risk_keys)
                 or not 0<=components['technical_raw']<=100 or not 0<=components['risk_penalty']<=30

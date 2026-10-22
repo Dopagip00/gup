@@ -20,7 +20,7 @@ class WorkflowBranchTests(unittest.TestCase):
     def evaluate(self, condition, *, event='schedule', ref='refs/heads/main', research_flag='',
                  deploy_flag='', repository='Dopagip00/gup', default_branch='main',
                  site_ready='true', stage='', schedule='0 1 * * 1-5', deploy_result='success',
-                 resolved_stage='publish',health_result='success',data_ready='true',close_ready='false'):
+                 resolved_stage='publish',health_result='success',data_ready='true',close_ready='false',financial_result='success'):
         expression=condition.replace('&&',' and ').replace('||',' or ')
         context={
             'vars':SimpleNamespace(ENABLE_SCHEDULED_RESEARCH=research_flag, ENABLE_PAGES_DEPLOY=deploy_flag),
@@ -28,7 +28,7 @@ class WorkflowBranchTests(unittest.TestCase):
                 event=SimpleNamespace(repository=SimpleNamespace(default_branch=default_branch),
                     inputs=SimpleNamespace(stage=stage), schedule=schedule)),
             'needs':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready,close_ready=close_ready)),
-                fundamentals=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
+                fundamentals=SimpleNamespace(result=financial_result,outputs=SimpleNamespace(site_ready=site_ready)),
                 deploy=SimpleNamespace(result=deploy_result),health=SimpleNamespace(result=health_result,outputs=SimpleNamespace(data_ready=data_ready))),
             'steps':SimpleNamespace(research=SimpleNamespace(outputs=SimpleNamespace(site_ready=site_ready)),
                 stage=SimpleNamespace(outputs=SimpleNamespace(stage=resolved_stage))),
@@ -88,6 +88,13 @@ class WorkflowBranchTests(unittest.TestCase):
         for job in ('deploy','deploy-longterm'):
             self.assertFalse(self.enabled(job,site_ready='false'))
             self.assertTrue(self.enabled(job,deploy_flag='true'))
+
+    def test_financial_pages_uses_its_success_and_ready_artifact_despite_observation_health_failure(self):
+        self.assertTrue(self.enabled('deploy-longterm',health_result='failure',financial_result='success'))
+        for result in ('failure','cancelled','skipped'):
+            with self.subTest(result=result):
+                self.assertFalse(self.enabled('deploy-longterm',health_result='failure',financial_result=result))
+        self.assertFalse(self.enabled('deploy-longterm',financial_result='success',site_ready='false'))
 
     def test_targets_and_bounded_pre_market_recovery_schedules(self):
         self.assertEqual(re.findall(r"(?m)^    - cron: '([^']+)'$",WORKFLOW),
