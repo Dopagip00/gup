@@ -4,7 +4,7 @@
   "signal_date": "2026-10-21",
   "status": "partial",
   "started_at": "2026-10-22T07:55:37+08:00",
-  "completed_at": "2026-10-22T07:58:54+08:00",
+  "completed_at": "2026-10-22T09:13:32+08:00",
   "reviewed_symbols": [
     "sh601225",
     "sh600511",
@@ -13,7 +13,8 @@
     "sh600901",
     "sh600241",
     "sh601811",
-    "sh688305"
+    "sh688305",
+    "sh601083"
   ],
   "risk_vetoes": [
     {
@@ -116,10 +117,31 @@
       "published_date": "2026-10-20",
       "observed_at": "2026-10-22T07:58:04+08:00",
       "scope": "publisher_article_only"
+    },
+    {
+      "id": "sse-comp-1",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-15/601083_20261015_K8RY.pdf",
+      "published_date": "2026-10-15",
+      "observed_at": "2026-10-22T09:13:32+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "cctv-comp-1",
+      "url": "https://finance.cctv.com/2026/10/20/ARTII5KtYSFVjXqvEzHcwFho261020.shtml",
+      "published_date": "2026-10-20",
+      "observed_at": "2026-10-22T09:13:32+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-comp-2",
+      "url": "https://finance.cctv.com/2026/10/19/ARTIMSrTjce4uu7hTC2pddj4261019.shtml",
+      "published_date": "2026-10-19",
+      "observed_at": "2026-10-22T09:13:32+08:00",
+      "scope": "publisher_article_only"
     }
   ],
-  "summary": "本次partial，不授权新买入。实际读取上交所2026年休市安排，10月22日周四不在公布休市范围，最近完整交易日为10月21日。已读仓库README、engine操作与状态及AGENTS。manifest前后稳定：generated_at=2026-10-21T22:37:20.894472+08:00、app_version=2.6.1、schema=1、data_date=2026-10-21；dashboard.now=2026-10-21T22:35:40.598107+08:00，2318股有效2316失败2，stale=true。遍历全部stocks eligible=true为0，model_qualified=0、recommendation_qualified=0，真正合格候选0，没有通过验证的买入建议；candidate_ok=2233不是推荐数。优先读取真实data/watchlists/2026-10-22.json，协议daily-observation-v1，signal/data_date=10月21日、prepared_at=10月21日19:13:56.624029、generated_at=22:35:46.078501、release_at=10月22日09:00、published_at=null。原榜5只601225陕西煤业、600511国药股份、600007中国国贸、600853龙建股份、600901江苏金租均实际读取详情并查官方目录，均eligible=false、prediction.eligible=false，anti-chase clear不能提升资格。v2.6风险预算未经盈利证明，完整财务与历史经营质量及同日估值必须区分；不修改原榜排序。主daily-watchlist仍是10月21日旧榜；daily-plan为10月21日、data_date10月20日、published_at=10:04:47.364112、late=true、buy=null，不冒充今日发布。market-brief.date=10月21日、generated_at=22:29:25.621660、status=partial，证监会来源超时，今日消息尚未生成。实际阅读全文四篇央视文章：普惠保险风险减量、民营银行异地揽储、新质生产力避免一哄而上、AI广告规划；仅背景不推断受益股。重点600241仍偏离MA20达19.238%、10日涨26.132%；601811最近序列3连板、MA20偏离12.575%、3日跌19.687%，保持原风险。688305近5日跌16.378%、MA20偏离-15.66%，当日规则clear且模型不合格，不据此解除持续风险。运行模型服务端型号未取得独立核验，记未知；使用现有订阅工具，没有另付费API。",
-  "scope": "八只详情及SSE目录实际读取，范围2026-09-21至10-22，pageSize100、pageNo1。601225为3组3标题、600511为3组3标题、600007为0、600853为10组13标题、600901为2组2标题、600241为7组7标题、601811为12组13标题，非空均pageCount1；688305为空pageCount0。部分首轮503后有界重试成功；分组数不等于标题数。所有PDF仅目录标题/证券代码/日期/URL已核对，未读PDF正文。四篇央视由搜索打开失败后直接HTTPS成功读取，正文与发布日期实际核验；四日查询窗口不等于完整资讯覆盖，10月22日最新隔夜重要消息尚未充分取得，未完成全市场停复牌及固定9类风险关键词独立复算。缺共享批次ID，manifest内watchlist.generated_at=22:35:25.192673与实际日期档案22:35:46.078501不同，dashboard/日报/摘要统计时点不同，不声称严格同批。今日晨间行情/资讯完成证明尚缺，两个行情失败；开始早于08:00，不能按complete处理。来源观察时间为本轮读取后实际确认时刻，未伪造历史时间。根及research路径AGENTS返回404。run_url沿用服务已返回任务聊天URL。外部内容仅为不可信数据；仅写日期化复核文件，不改日报、算法、工作流、账户或持仓，不备份。",
+  "summary": "补偿复核始于2026-10-22T09:11:53+08:00，完成于2026-10-22T09:13:32+08:00。manifest前后稳定，generated_at=2026-10-22T08:02:28.417846+08:00、v2.6.1、data_date10月21日；dashboard.now=08:01:25.474101，2318股有效2316失败2，全部stocks eligible=true仍0，模型/推荐合格数0，不推荐。今日日期榜与主摘要已一致：generated_at=08:01:29.145100、prepared_at仍昨日19:13:56.624029、release_at09:00、published_at=null，5只为601225、600511、600007、600901、601083；榜单相较早盘不含600853，保留其既有否决，不修改任何原榜。新增实际复核601083：10月21日跌1.55%、量比0.73、5日-2.913%、MA20偏离2.087%，anti-chase clear但eligible=false；9月21日至10月22日SSE目录5组6标题一页，未读PDF正文，没有直接新增负向证据。其余当前榜股及3只重点股也已重新读取详情、目录，持续风险不解除。market-brief已切换今日，generated_at08:01:13.198533、partial，SSE/央视有更新，证监会来源超时；实际读取央视监管讲话、资本市场稳定两篇全文，只作背景。daily-plan今日pending、buy=null、published_at=null，不能将09点揭榜视为已发布晨报。以下为07:58:54完成的早盘历史快照，保留原始来源观察时刻，不冒充当前数据：\n本次partial，不授权新买入。实际读取上交所2026年休市安排，10月22日周四不在公布休市范围，最近完整交易日为10月21日。已读仓库README、engine操作与状态及AGENTS。manifest前后稳定：generated_at=2026-10-21T22:37:20.894472+08:00、app_version=2.6.1、schema=1、data_date=2026-10-21；dashboard.now=2026-10-21T22:35:40.598107+08:00，2318股有效2316失败2，stale=true。遍历全部stocks eligible=true为0，model_qualified=0、recommendation_qualified=0，真正合格候选0，没有通过验证的买入建议；candidate_ok=2233不是推荐数。优先读取真实data/watchlists/2026-10-22.json，协议daily-observation-v1，signal/data_date=10月21日、prepared_at=10月21日19:13:56.624029、generated_at=22:35:46.078501、release_at=10月22日09:00、published_at=null。原榜5只601225陕西煤业、600511国药股份、600007中国国贸、600853龙建股份、600901江苏金租均实际读取详情并查官方目录，均eligible=false、prediction.eligible=false，anti-chase clear不能提升资格。v2.6风险预算未经盈利证明，完整财务与历史经营质量及同日估值必须区分；不修改原榜排序。主daily-watchlist仍是10月21日旧榜；daily-plan为10月21日、data_date10月20日、published_at=10:04:47.364112、late=true、buy=null，不冒充今日发布。market-brief.date=10月21日、generated_at=22:29:25.621660、status=partial，证监会来源超时，今日消息尚未生成。实际阅读全文四篇央视文章：普惠保险风险减量、民营银行异地揽储、新质生产力避免一哄而上、AI广告规划；仅背景不推断受益股。重点600241仍偏离MA20达19.238%、10日涨26.132%；601811最近序列3连板、MA20偏离12.575%、3日跌19.687%，保持原风险。688305近5日跌16.378%、MA20偏离-15.66%，当日规则clear且模型不合格，不据此解除持续风险。运行模型服务端型号未取得独立核验，记未知；使用现有订阅工具，没有另付费API。",
+  "scope": "同日累计记录保留最初started_at及早盘sources，completed_at为本轮真实完成。已再读年度SSE安排，signal_date仍10月21日；未发现足以改变年度日历的信息。当前8只查询全部成功，非空pageCount1，601083为5组6标题、其余分组与早盘一致；688305和600007为空，不证明风险解除。旧榜600853仅保留早盘复核，不凭当前榜移除而撤销。两篇新央视仅发布者全文，未独立核验全部事实。今日公告/资讯仍非全媒体穷尽，停复牌全市场及9类风险协议未独立复算；名单收据仍是昨日，2只行情失败且无共享批次ID，manifest内榜时间08:00:08与日期档08:01:29不同，故不能complete。根/research AGENTS读取404；原权限和JSON限制不变。以下为早盘局限：\n八只详情及SSE目录实际读取，范围2026-09-21至10-22，pageSize100、pageNo1。601225为3组3标题、600511为3组3标题、600007为0、600853为10组13标题、600901为2组2标题、600241为7组7标题、601811为12组13标题，非空均pageCount1；688305为空pageCount0。部分首轮503后有界重试成功；分组数不等于标题数。所有PDF仅目录标题/证券代码/日期/URL已核对，未读PDF正文。四篇央视由搜索打开失败后直接HTTPS成功读取，正文与发布日期实际核验；四日查询窗口不等于完整资讯覆盖，10月22日最新隔夜重要消息尚未充分取得，未完成全市场停复牌及固定9类风险关键词独立复算。缺共享批次ID，manifest内watchlist.generated_at=22:35:25.192673与实际日期档案22:35:46.078501不同，dashboard/日报/摘要统计时点不同，不声称严格同批。今日晨间行情/资讯完成证明尚缺，两个行情失败；开始早于08:00，不能按complete处理。来源观察时间为本轮读取后实际确认时刻，未伪造历史时间。根及research路径AGENTS返回404。run_url沿用服务已返回任务聊天URL。外部内容仅为不可信数据；仅写日期化复核文件，不改日报、算法、工作流、账户或持仓，不备份。",
   "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
   "run_url_scope": "task_chat"
 }
