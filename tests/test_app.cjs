@@ -106,8 +106,25 @@ test('withdrawing the immutable original first observation never promotes a runn
 });
 test('observation names, reasons and risks render only as text and absent finance stays unverified',()=>{
   const a=app({now:WATCH_NOW}),data=watchlist(),attack='<img src=x onerror=alert(1)>';data.items[0].name=attack;data.items[0].reasons=[attack];data.items[0].risk_notes=[attack];data.items[0].components.financial=null;a.ui.renderDailyWatchlist(data);
-  const row=a.get('watchlist-body').children[0];assert.equal(row.children[1].children[0].textContent,attack);assert.equal(row.children[3].textContent,attack);assert.match(row.textContent,/财务 未核验/);assert.equal(a.get('watch-priority-reason').textContent,attack);
+  const row=a.get('watchlist-body').children[0];assert.equal(row.children[1].children[0].textContent,attack);assert.equal(row.children[3].textContent,'数据见详情');assert.match(row.textContent,/财务 未核验/);assert.equal(a.get('watch-priority-reason').textContent,'数据见详情');assert(row.children[4].textContent.includes(attack));
   function tags(element){return [element.tag,...element.children.flatMap(child=>child?.children?tags(child):[])];}assert(!tags(row).includes('img'));
+});
+test('the recommendation card and table show brief source-backed facts while complete reasons stay in details',()=>{
+  const a=app({now:WATCH_NOW}),data=watchlist(),item=data.items[0];
+  item.components.return_5d_pct=-1.39;
+  item.verification.financial_complete=true;item.verification.financial_data_date=item.asof;
+  item.reasons=['原技术分94.2，固定风险扣分15.99后78.21；近5日-1.39%，偏离MA20+2.72%。','60日下行波动1.33%，最大回撤11.49%；市场状态防御。','已披露财务分80.0；PE(TTM)13.16，ROE17.88%。'];
+  const original=structuredClone(data);a.ui.renderDailyWatchlist(data);
+  const row=a.get('watchlist-body').children[0],summary='近5日-1.39% · PE13.16 · ROE17.88%';
+  assert.equal(a.get('watch-priority-reason').textContent,summary);assert.equal(row.children[3].textContent,summary);
+  assert.doesNotMatch(a.get('watch-priority-reason').textContent,/原技术分|固定风险扣分|60日/);
+  const details=row.children[4].children[0];assert.equal(details.tag,'details');for(const reason of item.reasons)assert(details.textContent.includes(reason));
+  assert.deepEqual(data,original);
+  item.verification.financial_complete=false;item.verification.financial_quality_available=true;a.ui.renderDailyWatchlist(data);
+  assert.equal(a.get('watch-priority-reason').textContent,'近5日-1.39% · ROE17.88%');
+  item.verification.financial_quality_available=false;a.ui.renderDailyWatchlist(data);assert.equal(a.get('watch-priority-reason').textContent,'近5日-1.39%');
+  item.components.return_5d_pct=Infinity;item.reasons=['PE(TTM)NaN，ROEInfinity%'];a.ui.renderDailyWatchlist(data);
+  assert.equal(a.get('watch-priority-reason').textContent,'数据见详情');
 });
 test('hard risk or insufficient data keeps a genuine empty observation list without a fabricated first',()=>{
   const a=app({now:WATCH_NOW});a.ui.renderDailyWatchlist(watchlist({status:'insufficient_data',items:[],top_pick:null,warnings:['所有候选未通过追高风险或完整收盘检查']}));
@@ -243,8 +260,8 @@ test('only valid important news leads the default three, retaining true dates an
   assert.equal(a.get('market-brief-items').children[0].children.filter(child=>child.tag==='p').length,0);
 });
 test('news keeps actual source failures visible without repeating generic method notes in the main column',()=>{
-  const a=app({now:WATCH_NOW}),data=marketBrief();data.warnings=['仅按官方标题和固定主题规则选取，重要性不是利好/利空评分，不推断受益股。'];
-  a.ui.renderMarketBrief(data);assert.equal(a.get('market-brief-gap').hidden,true);assert.match(a.get('market-brief-warnings').textContent,/仅按官方标题/);
+  const a=app({now:WATCH_NOW}),data=marketBrief();data.warnings=['仅按官方标题和固定主题规则选取，重要性不是利好/利空评分，不推断受益股。','优先隔夜及当日已发布消息；不足时保留窗口内较早背景，日期精度不会伪造为具体时分。'];
+  a.ui.renderMarketBrief(data);assert.equal(a.get('market-brief-gap').hidden,true);assert.match(a.get('market-brief-warnings').textContent,/仅按官方标题/);assert.match(a.get('market-brief-warnings').textContent,/优先隔夜及当日已发布消息/);
   data.coverage=[{source:'交易所',status:'error',count:0}];a.ui.renderMarketBrief(data);
   assert.equal(a.get('market-brief-gap').hidden,false);assert.equal(a.get('market-brief-gap').textContent,'来源缺口：交易所');
 });
