@@ -221,7 +221,10 @@ test('compact observation presentation keeps key gaps and withdrawal visible wit
 test('recommendations lead the page, dates stay small at the right and the empty certified card is absent',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../../ashare-platform/static/index.html'),'utf8');
   const overview=html.slice(html.indexOf('<section id="view-overview"'),html.indexOf('<section id="view-longterm"'));
-  assert(overview.indexOf('id="daily-watchlist-panel"')<overview.indexOf('id="market-brief-panel"'));
+  assert.doesNotMatch(overview,/market-brief-panel|daily-news-list/);
+  const news=html.slice(html.indexOf('<section id="view-news"'),html.indexOf('<section id="view-reports"'));
+  assert.match(news,/market-brief-panel/);assert.match(news,/daily-news-list/);
+  assert.doesNotMatch(html,/每日交易计划|view-plan|plan-buy|daily-sell/);
   assert(overview.indexOf('id="watch-priority-name"')<overview.indexOf('id="history-date"'));
   assert.match(overview,/<h1 id="watchlist-title">今日推荐<\/h1>.*class="recommendation-meta"[^]*?<time id="recommendation-date">/);
   assert.doesNotMatch(overview,/recommendation-day|观察名单未通过|仅观察 · 非买入信号|暂无经过验证的首选/);
@@ -245,17 +248,17 @@ function marketBrief(overrides={}){
   const item={id:'one',title:'央行公布公开政策信息',url:'https://www.pbc.gov.cn/example.html',source:'中国人民银行',published_at:'2026-10-20T08:10:00+08:00',published_precision:'minute',collected_at:'2026-10-20T08:12:00+08:00',importance:'high',importance_reason:'公开政策信息',topics:['政策'],impact:'policy',scope:'官方标题核验'};
   return {protocol:'market-brief-v1',date:'2026-10-20',generated_at:'2026-10-20T08:15:00+08:00',status:'complete',items:[item],coverage:[],warnings:[],...overrides};
 }
-test('important news preserves source date precision and shows only three items before expansion',()=>{
+test('news page shows all collected items and preserves source date precision',()=>{
   const a=app({now:WATCH_NOW}),data=marketBrief();data.items=Array.from({length:4},(_,i)=>({...data.items[0],id:String(i),title:`重要消息${i}`}));
   data.items[0].published_at='2026-10-20';data.items[0].published_precision='day';
   data.items[1].published_at='2026-10-20T08:10:23+08:00';data.items[1].published_precision='second';
   data.status='partial';data.coverage=[{source:'证监会',status:'error',collected_at:'2026-10-20T08:14:00+08:00',count:0,error:'公开来源暂不可用'}];
   a.ui.renderMarketBrief(data);
-  assert.equal(a.get('market-brief-items').children.length,3);assert.equal(a.get('market-brief-extra').children.length,1);assert.equal(a.get('market-brief-more').hidden,false);
-  assert.match(a.get('market-brief-extra').children[0].textContent,/2026-10-20 · 仅提供日期/);assert.doesNotMatch(a.get('market-brief-extra').children[0].textContent,/00:00/);
+  assert.equal(a.get('market-brief-items').children.length,4);assert.equal(a.get('market-brief-more').hidden,false);
+  assert.match(a.get('market-brief-items').children[3].textContent,/2026-10-20 · 仅提供日期/);assert.doesNotMatch(a.get('market-brief-items').children[3].textContent,/00:00/);
   assert.match(a.get('market-brief-date').textContent,/2026-10-20.*实际整理/);assert.match(a.get('market-brief-status').textContent,/部分来源缺失/);assert.match(a.get('market-brief-gap').textContent,/证监会/);
 });
-test('only valid important news leads the default three, retaining true dates and omitting generic commentary',()=>{
+test('valid important news leads the full list, retaining true dates and omitting generic commentary',()=>{
   const a=app({now:WATCH_NOW}),data=marketBrief(),base=data.items[0];
   data.items=[
     {...base,id:'recent',title:'普通最新标题',importance:'normal',importance_reason:'官方近期财经标题，供背景阅读。'},
@@ -265,10 +268,10 @@ test('only valid important news leads the default three, retaining true dates an
     {...base,id:'regulation',title:'此前资本市场公告',published_at:'2026-10-19T14:00:00+08:00',importance:'high',topics:['资本市场'],importance_reason:'标题涉及资本市场，值得核对原文。'}
   ];
   const original=structuredClone(data);a.ui.renderMarketBrief(data);
-  assert.deepEqual(a.get('market-brief-items').children.map(row=>row.children[0].textContent),['此前资本市场公告','此前货币政策公告','普通最新标题']);
-  assert.equal(a.get('market-brief-extra').children[0].children[0].textContent,'普通稍早标题');
+  assert.deepEqual(a.get('market-brief-items').children.map(row=>row.children[0].textContent),['此前资本市场公告','此前货币政策公告','普通最新标题','普通稍早标题']);
+  assert.equal(a.get('market-brief-items').children[3].children[0].textContent,'普通稍早标题');
   assert.match(a.get('market-brief-items').children[0].textContent,/10.?19/);assert.doesNotMatch(a.get('market-brief-items').textContent,/标题涉及资本市场/);
-  assert.doesNotMatch(a.get('market-brief-items').textContent+a.get('market-brief-extra').textContent,/供背景阅读|无效未来重要消息/);
+  assert.doesNotMatch(a.get('market-brief-items').textContent,/供背景阅读|无效未来重要消息/);
   assert.match(a.get('market-brief-gap').textContent,/1条消息缺少有效日期或来源时间/);assert.deepEqual(data,original);
   const generic=marketBrief();generic.items[0].importance_reason='官方近期财经标题，供背景阅读。';a.ui.renderMarketBrief(generic);
   assert.equal(a.get('market-brief-items').children[0].children.filter(child=>child.tag==='p').length,0);
@@ -289,7 +292,7 @@ test('important news is text-only and invalid links or future observations never
 });
 test('late news responses cannot replace a newer today or historical selection',async()=>{
   const a=app({now:WATCH_NOW}),pending=[],paths=[];a.ui.state.connected=true;a.ui.setApi(url=>{paths.push(url);return new Promise(resolve=>pending.push(resolve));});
-  const first=a.ui.loadMarketBrief();a.ui.state.historyDate='2026-10-19';const historical=a.ui.loadMarketBrief();a.ui.state.historyDate='';const latest=a.ui.loadMarketBrief();
+  const first=a.ui.loadMarketBrief();a.ui.state.newsDate='2026-10-19';const historical=a.ui.loadMarketBrief();a.ui.state.newsDate='';const latest=a.ui.loadMarketBrief();
   const old=marketBrief();old.items[0].title='过时的首次响应';pending[0](old);await first;assert.equal(a.get('market-brief-items').children.length,0);
   const current=marketBrief();current.items[0].title='最新当日消息';pending[2](current);await latest;
   pending[1](marketBrief({date:'2026-10-19',status:'historical_unavailable',items:[]}));await historical;
@@ -297,7 +300,7 @@ test('late news responses cannot replace a newer today or historical selection',
   assert.match(a.get('market-brief-items').textContent,/最新当日消息/);assert.doesNotMatch(a.get('market-brief-items').textContent,/过时的首次响应/);assert.equal(a.ui.state.connected,true);
 });
 test('missing historical news never borrows today and a news endpoint failure keeps the dashboard connected',async()=>{
-  const a=app({now:WATCH_NOW}),dashboard={meta:{data_date:'2026-10-19'},stocks:[]};a.ui.state.connected=true;a.ui.state.dashboard=dashboard;a.ui.state.historyDate='2026-10-19';
+  const a=app({now:WATCH_NOW}),dashboard={meta:{data_date:'2026-10-19'},stocks:[]};a.ui.state.connected=true;a.ui.state.dashboard=dashboard;a.ui.state.newsDate='2026-10-19';
   a.ui.setApi(async()=>marketBrief());await a.ui.loadMarketBrief();assert.equal(a.get('market-brief-items').children.length,0);assert.match(a.get('market-brief-empty').textContent,/未用其他日期替代/);
   a.ui.setApi(async()=>{throw Error('404');});await a.ui.loadMarketBrief();assert.equal(a.ui.state.connected,true);assert.equal(a.ui.state.dashboard,dashboard);assert.match(a.get('market-brief-empty').textContent,/行情与观察榜仍可查看/);
 });
