@@ -294,7 +294,7 @@ def export_site(output_dir, service, engine_dir=None):
     script = script.replace('云端托管：数据获取与交易日研究由云端任务运行，不依赖你的电脑开机。计划生成结果以每日交易计划的报告日期与状态为准。',
         'GitHub Pages 静态快照：Actions 云端任务采集与发布，不依赖电脑开机。定时任务可能延迟或失败，请核对报告日期、实际更新时间和运行状态。重新读取不会触发采集。')
     (output/'app.js').write_text(script,encoding='utf-8')
-    for name in ('styles.css','favicon.svg'):
+    for name in ('styles.css','favicon.svg','favicon.ico','favicon-32.png','apple-touch-icon.png'):
         if (engine/'static'/name).exists(): shutil.copyfile(engine/'static'/name,output/name)
     shutil.copyfile(HERE/'pages.js',output/'pages.js')
     shutil.copyfile(engine/'MIGRATION.md',output/'MIGRATION.md')

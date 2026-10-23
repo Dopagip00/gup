@@ -82,7 +82,7 @@ def make_handler(service, port):
                     return self.send(service.agent_state())
                 if url.path == '/api/export.csv':
                     return self.send(service.export_csv(query.get('date', [None])[0]), content_type='text/csv; charset=utf-8', attachment='ashare-daily.csv')
-                allowed = {'/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/favicon.svg': 'favicon.svg'}
+                allowed = {'/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/favicon.svg': 'favicon.svg', '/favicon.ico': 'favicon.ico', '/favicon-32.png': 'favicon-32.png', '/apple-touch-icon.png': 'apple-touch-icon.png'}
                 if url.path in allowed:
                     path = core.BASE / 'static' / allowed[url.path]
                     if path.is_file():
