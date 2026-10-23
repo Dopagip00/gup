@@ -172,7 +172,7 @@ class PublicationTests(unittest.TestCase):
             values={'ai_review':receipt,'market_brief:2026-10-19':brief}
             fake=SimpleNamespace(BASE=engine,now=lambda:dt.datetime(2026,10,19,9,tzinfo=dt.timezone(dt.timedelta(hours=8))),
                 md=SimpleNamespace(get_calendar=lambda year:{},is_trading_day=lambda day:True,CalendarUnavailable=RuntimeError),
-                getkv=lambda key,default=None:values.get(key,default))
+                getkv=lambda key,default=None:values.get(key,default), load_history=lambda symbol:{'bars':[]})
             @contextlib.contextmanager
             def connection():
                 con=sqlite3.connect(':memory:');con.execute('CREATE TABLE kv(key TEXT,value TEXT)')

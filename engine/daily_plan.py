@@ -310,6 +310,9 @@ def publish(date=None):
         not s.get('excluded') and s.get('symbol') not in risks and
         all(_positive(s.get(key)) for key in ('entry_low', 'entry_high', 'stop_loss', 'take_profit', 'raw_close')) and
         s['stop_loss'] < s['entry_low'] <= s['entry_high'] < s['take_profit']]
+    market_state = dash.get('meta', {}).get('main_wave_market')
+    if isinstance(market_state, dict) and market_state.get('regime') != 'strong':
+        candidates = []
     ai_receipt=core.getkv('ai_review',{})
     ai_ready,ai_vetoes,ai_warning=_ai_risk_review(moment,target,candidates,ai_receipt)
     candidates=[s for s in candidates if s.get('symbol') not in ai_vetoes]

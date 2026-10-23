@@ -21,6 +21,7 @@ import time
 import market_data as md
 import strategy
 import forecast
+import main_wave
 
 BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('ASHARE_DATA_DIR', str(BASE / 'data'))).resolve()
@@ -624,11 +625,18 @@ class Service:
                         raise md.MarketDataError('上交所实时完整名单缺少可核验的官方页面或实际接口来源')
                     universe_receipt.update(source=md.SSE_LIST_SOURCE, source_api=next(iter(apis)),
                                             source_provenance='sse_live_verified')
+                    universe_receipt['industries'] = {s['symbol']: s['industry'] for s in stocks
+                        if isinstance(s.get('industry'), str) and s['industry'].strip() and len(s['industry']) <= 80}
             with connect() as con:
                 con.execute('UPDATE securities SET active=0')
                 con.executemany('INSERT INTO securities VALUES(?,?,1) ON CONFLICT(symbol) DO UPDATE SET name=excluded.name,active=1', [(s['symbol'], s['name']) for s in stocks])
                 con.execute('UPDATE runs SET total=? WHERE id=?', (len(stocks), run_id))
             putkv('universe_info', universe_receipt)
+            if not universe_receipt.get('industries'):
+                industries = {s['symbol']: s['industry'] for s in stocks if isinstance(s.get('industry'), str) and 0 < len(s['industry']) <= 80}
+                if industries:
+                    universe_receipt['industries'] = industries
+                    putkv('universe_info', universe_receipt)
             index_error = None
             try:
                 index_hist = md.fetch_history('sh000001', count=cfg['history_count'])
@@ -787,6 +795,7 @@ class Service:
         meta['agent_status'] = {'verified': False, 'execution_verified': False, 'mode': 'manual_research', 'status': 'manual', 'message': '仅生成研究与买卖参考，由本人操作；已停用券商接入。'}
         meta['exclusion_policy'] = '金融、石油石化、指定大型指数权重股及已知总市值5000亿元以上股票仅列参考'
         meta['model_quality'] = model_quality(stocks, index_date)
+        meta['main_wave_market'] = main_wave.market(load_history('sh000001').get('bars', []), index_date)
         official = getkv('daily_plan:'+now().date().isoformat(), {})
         meta.update(daily_buy=official.get('buy'),daily_plan_status=official.get('status','pending'),
             daily_plan_message=official.get('message','当日09:00日报尚未发布；休市日不生成交易计划。当前表格为收盘研究。'))
@@ -831,7 +840,10 @@ class Service:
             backtest_error = None
         except ValueError as exc:
             backtest, backtest_error = None, str(exc)
-        return {'stock': result, 'bars': history['bars'], 'backtest': backtest, 'backtest_error': backtest_error, 'source': history.get('source')}
+        wave = main_wave.assess(history['bars'], ix, result.get('date'))
+        main_wave.apply_stock_gates(wave, result)
+        wave['sections'] = main_wave.decision(wave)
+        return {'stock': result, 'main_wave': wave, 'bars': history['bars'], 'backtest': backtest, 'backtest_error': backtest_error, 'source': history.get('source')}
 
     def poll_quotes(self):
         if not is_open():

@@ -240,11 +240,11 @@
     if(!requested&&data.date<today.date)return hide('pending','今日观察榜尚未准备；旧榜保留在历史档案，不改标今日。');
     if(now.getTime()<release)return hide('prepared',`${data.date} 的观察榜已预备，09:00按实际客户端时钟揭榜；服务器尚未在09:00发布。`);
     const target=context(calendars,new Date(data.date+'T09:00:00+08:00')).target;
-    if(data.status==='watch_only'&&data.data_date!==target)return hide('insufficient_data','观察榜行情未达到该日盘前完整交易日，不改标数据。');
+    if(['watch_only','cash'].includes(data.status)&&data.data_date!==target)return hide('insufficient_data','观察榜行情未达到该日盘前完整交易日，不改标数据。');
     data.eligible=false;data.actionable=false;data.model_validated=false;
     for(const item of data.items){item.eligible=false;item.actionable=false;item.model_validated=false;for(const key of ['entry_low','entry_high','stop_loss','take_profit','max_position_pct'])item[key]=null;}
     data.top_pick=data.items[0]||null;
-    if(!data.published_at&&data.status==='watch_only'){
+    if(!data.published_at&&['watch_only','cash'].includes(data.status)){
       data.release_mode='prepublished_client_reveal';data.revealed_at=now.toISOString();
       data.message='此观察榜已在盘前预先准备，现按客户端北京时间09:00揭榜；published_at仍为空，不冒充服务器准点发布。';
     }else if(data.published_at&&(!Number.isFinite(Date.parse(data.published_at))||Date.parse(data.published_at)<release||Date.parse(data.published_at)>now.getTime()+300000))return hide('unavailable','服务器实际发布时间无效，拒绝冒充已发布。');

@@ -293,9 +293,10 @@ def checked_watchlists(value):
     for date, cohort in value.items():
         if (not isinstance(date,str) or dt.date.fromisoformat(date).isoformat()!=date
                 or not isinstance(cohort,dict) or cohort.get('date')!=date
-                or cohort.get('protocol')!='daily-observation-v1' or cohort.get('status')!='watch_only'
+                or cohort.get('protocol')!='daily-observation-v1' or cohort.get('status') not in ('watch_only','cash')
                 or cohort.get('model_validated') is not False or cohort.get('actionable') is not False
-                or not isinstance(cohort.get('items'),list) or not 1<=len(cohort['items'])<=5):
+                or not isinstance(cohort.get('items'),list) or not 0<=len(cohort['items'])<=5
+                or (cohort.get('status') == 'watch_only' and not cohort['items'])):
             raise ValueError('观察榜档案日期、协议或观察资格无效')
         data_date=cohort.get('data_date')
         if not isinstance(data_date,str) or dt.date.fromisoformat(data_date).isoformat()!=data_date or data_date>=date:
@@ -319,7 +320,14 @@ def checked_watchlists(value):
                     or any(item.get(key) is not None for key in ('entry_low','entry_high','stop_loss','take_profit','max_position_pct'))):
                 raise ValueError('观察档案含无效代码、重复排名或操作性指令')
             seen.add(symbol)
-        if canonical(cohort.get('top_pick'))!=canonical(cohort['items'][0]):
+        if cohort.get('status') == 'cash':
+            from engine import main_wave
+            if (cohort['items'] or cohort.get('top_pick') is not None
+                    or cohort.get('ranking_policy') != main_wave.POLICY
+                    or not main_wave.valid_market(cohort.get('main_wave_market'), data_date)
+                    or cohort['main_wave_market']['regime'] not in ('weak','range')):
+                raise ValueError('空仓记录缺少真实市场证据')
+        if canonical(cohort.get('top_pick'))!=canonical(cohort['items'][0] if cohort['items'] else None):
             raise ValueError('观察档案首位与原始排名不一致')
     return value
 
@@ -809,7 +817,7 @@ def update_watchlist(core, service, moment):
 def attach_watchlist(result, core, service):
     moment = dt.datetime.fromisoformat(result.get('finished_at') or result['started_at'])
     result['watchlist'] = update_watchlist(core, service, moment)
-    if result.get('status') == 'prepared' and (result['watchlist'].get('status') != 'watch_only' or not result['watchlist'].get('count')):
+    if result.get('status') == 'prepared' and (result['watchlist'].get('status') not in ('watch_only','cash') or (result['watchlist'].get('status')=='watch_only' and not result['watchlist'].get('count'))):
         result.update(status='pending',reason='观察榜尚未具备有效行情或必要证据，未完成预备；不把空榜记作准备成功。')
     return result
 

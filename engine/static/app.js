@@ -145,6 +145,7 @@ function renderDashboard(data) {
   reasons.forEach(r=>brief.append(node('li','',typeof r==='object'?r.description||r.label||JSON.stringify(r):r)));
   text('data-date',m.data_date || m.report_date); text('next-run',shortTime(m.next_run));
   renderResearchSource();
+  applyWaveMarket();
   text('index-chart-date',ix.date || '收盘数据');
   text('index-chart-caption',ix.source?`数据：${ix.source}`:'历史走势不代表未来表现');
   text('stock-count',`${opportunities.length} 只合格`);
@@ -239,6 +240,8 @@ async function openStock(stock) {
 function renderDetail() {
   const d=state.detailData;if(!d)return;const s=d.stock, historical=d.historical, valid=!s.stale && !s.excluded && !historical;
   $('detail-loading').hidden=true;$('detail-content').hidden=false;
+  const wave=clear($('main-wave-details'));wave.hidden=!!historical||!d.main_wave;
+  if(!wave.hidden)for(const section of list(d.main_wave.sections)){wave.append(node('h3','',section.title),node('p','',section.text));}
   text('detail-price',number(s.raw_close ?? s.close));setChange('detail-change',s.change_pct);text('detail-score',`${number(s.score,0)} / 100（技术分，非概率）`);text('detail-signal',s.stale?'过期 / 离线 · 非推荐':s.excluded?'排除项 · 非推荐':shortEligible(s)?'验证合格候选':'未通过研究 · 非推荐');
   $('detail-signal').className=`pill ${shortEligible(s)?'positive':s.stale?'warn':'neutral'}`;
   let warnings=list(s.warnings).map(String);if(s.excluded)warnings.unshift(s.exclusion_reason || '该股属于排除的权重指标股，仅作参考，不进入短线首选。');if(s.prediction && !s.prediction.eligible)warnings.unshift('预测验证未通过；如下方有价位，仅为研究参考，不构成买入建议，请勿据此强行买入。');if(historical)warnings.unshift('当前为历史研究快照。买入参考与模拟委托不可用于当前交易，历史回测未在此重算。');else if(s.stale)warnings.unshift('行情尚未达到目标交易日，暂停价位建议和模拟买入。');
@@ -384,7 +387,7 @@ function renderObservationDay(data=state.dailyWatchlist) {
   text('recommendation-date-label',state.historyDate?historical?'历史推荐 · 北京时间':'所选日期 · 北京时间':'北京时间');
   text('recommendation-date',day);
   const published=Date.parse(data?.published_at),release=Date.parse(data?.release_at);
-  const matching=data?.date===day,ready=matching&&data.protocol==='daily-observation-v1'&&data.status==='watch_only'&&(Number.isFinite(published)&&Number.isFinite(release)&&release<=published&&published<=Date.now()||watchClientReveal(data));
+  const matching=data?.date===day,ready=matching&&data.protocol==='daily-observation-v1'&&['watch_only','cash'].includes(data.status)&&(Number.isFinite(published)&&Number.isFinite(release)&&release<=published&&published<=Date.now()||watchClientReveal(data));
   const status=ready?data.late===true?'迟到更新':historical?'历史记录':'':matching&&data.status==='closed'?'休市':state.historyDate?'记录待更新':'推荐待更新';
   text('recommendation-status',status);$('recommendation-status').hidden=!status;
 }
@@ -427,7 +430,7 @@ function watchClientReveal(data,now=Date.now()) {
   const transport=data?.snapshot_transport,snapshot=instant(transport?.generated_at),items=list(data?.items);
   return typeof window.PagesResearch?.gateWatchlist==='function'
     && data?.release_mode==='prepublished_client_reveal'&&data.published_at===null
-    && data.status==='watch_only'&&data.publication_timing==='prepared'&&data.late===false
+    && ['watch_only','cash'].includes(data.status)&&data.publication_timing==='prepared'&&data.late===false
     && data.model_validated===false&&data.eligible===false&&data.actionable===false
     && /^\d{4}-\d{2}-\d{2}$/.test(data.date||'')&&/^\d{4}-\d{2}-\d{2}$/.test(data.data_date||'')
     && data.data_date<data.date&&data.signal_date===data.data_date&&data.prepared_data_date===data.data_date
@@ -437,8 +440,16 @@ function watchClientReveal(data,now=Date.now()) {
     && generated<=snapshot&&snapshot<=now&&['live','offline'].includes(transport?.mode)
     && shanghaiDay(new Date(prepared))>=data.data_date
     && (shanghaiDay(new Date(prepared))!==data.data_date||prepared>=Date.parse(`${data.data_date}T16:00:00+08:00`))
-    && items.length>0&&items.length<=5&&items.every(item=>/^sh\d{6}$/.test(item?.symbol||'')
+    && (data.status==='cash'?items.length===0:items.length>0)&&items.length<=5&&items.every(item=>/^sh\d{6}$/.test(item?.symbol||'')
       && item.asof===data.data_date&&item.model_validated===false&&item.eligible===false&&item.actionable===false);
+}
+function applyWaveMarket() {
+  const m=state.dashboard?.meta,w=m?.main_wave_market;
+  if(state.historyDate||!w||w.protocol!=='main-wave-daily-v1'||w.as_of!==m.data_date||m.data_date!==m.expected_date||!['weak','range'].includes(w.regime))return;
+  text('watch-priority-label','主升浪策略');text('watch-priority-name','空仓等待');
+  text('watch-priority-reason',`${w.regime==='weak'?'弱势':'震荡'}市场 · 暂停新增候选`);
+  $('watch-priority-metrics').hidden=true;
+  if(state.dailyWatchlist?.items?.length)text('watchlist-summary',`${state.dailyWatchlist.items.length} 只 · 今日原始榜单`);
 }
 function renderDailyWatchlist(data,options={}) {
   renderObservationDay(data);
@@ -476,8 +487,12 @@ function renderDailyWatchlist(data,options={}) {
     else if(selected&&recordDate!==selected){emptyTitle='所选日期暂无观察档案';emptyReason=`请求 ${selected}，取得记录属于 ${recordDate}；未用其他日期代替。`;}
     else if(['closed','historical_unavailable'].includes(data.status)){
       emptyTitle=data.status==='closed'?'非交易日，不生成当日观察榜':'所选日期暂无观察档案';emptyReason=warnings.join('；')||'未取得所选日期的已发布原始观察记录，不回填历史排名。';
+    }else if(data.status==='insufficient_data'&&data.ranking_policy==='main-wave-observation-v4'&&recordDate===today&&now>=release){
+      emptyTitle='空仓等待';emptyReason=data.message||'主升浪证据不足';text('watch-priority-name',emptyTitle);text('watch-priority-reason',emptyReason);
     }else if(recordDate>today||!Number.isFinite(release)||now<release||!clientReveal&&(!Number.isFinite(published)||published<release||published>now)){
       emptyTitle='观察榜尚未正式发布';emptyReason=`计划在所属交易日 09:00 发布；当前为${data.publication_timing==='prepared'?'准备记录':'待核验记录'}，未展示提前或未发布的排名。`;
+    }else if(data.status==='cash'){
+      emptyTitle='空仓等待';emptyReason=data.message||'当前市场不符合主升浪条件';text('watch-priority-name',emptyTitle);text('watch-priority-reason',emptyReason);
     }else if(data.status==='insufficient_data'){
       emptyTitle='有效研究不足，观察榜为空';
       emptyReason=warnings.join('；')||'有效数据或硬风险检查不足，不强行凑足 5 只。';
@@ -503,7 +518,7 @@ function renderDailyWatchlist(data,options={}) {
       score.append(node('span','price-primary',typeof item.score==='number'&&Number.isFinite(item.score)&&item.score>=0&&item.score<=100?`${number(item.score,1)} / 100`:'—'),node('span','price-sub',`${removed?'原评分 · ':''}技术 ${numeric(components.technical)?number(components.technical,1):'未提供'} · ${qualityOnly?'财务质量':'财务'} ${numeric(components.financial)?number(components.financial,1):'未核验'}${qualityOnly?' · 估值待核验':''}`));tr.append(score);
       tr.append(node('td','reference-reason',watchFacts(item)));
       if(removed)risks.append(node('span','pill warn','已撤销'));
-      const riskDetails=node('details','risk-details');riskDetails.append(node('summary','','分析详情'),node('p','',list(item.reasons).map(watchText).join('；')||'暂无详细依据。'),node('p','',conciseWatchNotes(item.risk_notes).join('；')||'暂无新增风险记录。'));risks.append(riskDetails);tr.append(risks);body.append(tr);
+      const riskDetails=node('details','risk-details');riskDetails.append(node('summary','','分析详情'),node('p','',list(item.reasons).map(watchText).join('；')||'暂无详细依据。'),node('p','',conciseWatchNotes(item.risk_notes).join('；')||'暂无新增风险记录。'));risks.append(riskDetails);const waveButton=node('button','button light small','主升浪分析');waveButton.addEventListener('click',()=>openStock(item));risks.append(waveButton);tr.append(risks);body.append(tr);
     });
     if(rows.length)text('watchlist-summary',`${rows.length} 只 · ${history?'历史排序':'综合排序'}`);
   }
@@ -518,6 +533,7 @@ function renderDailyWatchlist(data,options={}) {
   $('watchlist-gap').hidden=!data||!gaps.length;text('watchlist-gap',gaps.join(' · '));
   text('watchlist-warning-count',warnings.length?`· ${new Set(warnings).size}项记录`:'');
   $('watchlist-alert').hidden=!warnings.length; text('watchlist-alert',[...new Set(warnings)].join('\n'));
+  applyWaveMarket();
 }
 async function loadDailyWatchlist() {
   const date=state.historyDate,request=state.watchlistRequest=(state.watchlistRequest||0)+1;

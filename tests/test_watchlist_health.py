@@ -66,6 +66,24 @@ class WatchlistHealthTests(unittest.TestCase):
         self.assertEqual(self.calls[0], self.calls[-1])
         self.assertIn(health.BASE_URL + "data/watchlists/2026-10-20.json", self.calls)
 
+    def test_verified_cash_is_available_without_a_top_pick_and_tampering_fails(self):
+        from engine import main_wave
+        dates = []
+        day = dt.date(2026, 10, 19)
+        while len(dates) < 65:
+            if health._trading_day(self.values['calendar'], day, {}): dates.append(day.isoformat())
+            day -= dt.timedelta(days=1)
+        rows = [dict(date=d, open=20-i*.05, high=20-i*.05, low=20-i*.05, close=20-i*.05, volume=100)
+                for i,d in enumerate(reversed(dates))]
+        record = self.values['daily-watchlist']
+        record.update(status='cash', items=[], top_pick=None, ranking_policy=main_wave.POLICY,
+                      main_wave_market=main_wave.market(rows,'2026-10-19'))
+        result = self.check()
+        self.assertTrue(result['ok']); self.assertTrue(result['watchlist_ready'])
+        self.assertFalse(result['has_top_pick']); self.assertEqual(result['status'],'cash')
+        record['main_wave_market']['regime']='strong'
+        self.assertFalse(self.check()['ok'])
+
     def test_prepared_before_nine_passes_but_stays_hidden(self):
         self.prepared()
         result = self.check(now=self.now.replace(hour=8, minute=59, second=59))

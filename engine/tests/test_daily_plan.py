@@ -96,11 +96,12 @@ class DailyPlanTests(unittest.TestCase):
         core.putkv('ai_review',{'protocol':daily_plan.AI_PROTOCOL,'date':date,'signal_date':target,
             'status':'complete','valid':True,'morning_qualified':True,'checked_at':date+'T08:40:00+08:00',
             'errors':[],'review':review})
-    def run_day(self,date,stocks,minute=0,hour=9,prepare=True,coverage=None):
+    def run_day(self,date,stocks,minute=0,hour=9,prepare=True,coverage=None,market=None):
         now=dt.datetime.fromisoformat(date+'T'+str(hour).zfill(2)+':'+str(minute).zfill(2)).replace(tzinfo=core.TZ)
         if prepare:self.prepare_morning(date)
         with patch.object(core,'now',return_value=now),patch.object(core,'Service') as service:
             service.return_value.dashboard.return_value={'stocks':stocks,'meta':{'coverage':coverage or {'total':100,'ok':100}}}
+            if market is not None:service.return_value.dashboard.return_value['meta']['main_wave_market']=market
             already_published=(core.getkv('daily_plan:'+date,{}) or {}).get('status')=='published'
             result=daily_plan.publish()
             if result['status']=='published' and not already_published:
@@ -121,6 +122,10 @@ class DailyPlanTests(unittest.TestCase):
         self.assertEqual(a,b)
     def test_no_forced_buy_for_failed_validation(self):
         result=self.run_day('2026-10-19',[self.stock(eligible=False)]);self.assertIsNone(result['buy'])
+
+    def test_main_wave_weak_market_vetoes_an_otherwise_qualified_new_buy(self):
+        result=self.run_day('2026-10-19',[self.stock()],market={'regime':'weak'})
+        self.assertIsNone(result['buy'])
 
     def test_cloud_ai_must_be_current_complete_sourced_and_cover_all_base_candidates(self):
         date='2026-10-19'

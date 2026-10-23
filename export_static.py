@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 HERE = Path(__file__).resolve().parent
 META_KEYS = {'app_name','now','status','last_success','data_date','report_date','expected_date','stale',
              'universe','coverage','mode','schedule','next_run','warnings','daily_buy',
-             'daily_plan_status','daily_plan_message','exclusion_policy','model_quality'}
+             'daily_plan_status','daily_plan_message','exclusion_policy','model_quality','main_wave_market'}
 
 QUOTE_EVIDENCE_KEYS = {'quote_basis','quote_date','price_reference_date','quote_consistent',
                        'quote_source','quote_datetime','quote_fetched_at','previous_close'}
@@ -107,7 +107,7 @@ def public_watchlist(value):
     keys={'protocol','date','data_date','signal_date','generated_at','prepared_at','prepared_data_date',
           'release_at','published_at','publication_timing','late','status','model_validated','actionable',
           'eligible','coverage','verification','warnings','method','scope','message','rankings_immutable',
-          'release_basis','review_at','current_risk_verification','ranking_policy'}
+          'release_basis','review_at','current_risk_verification','ranking_policy','main_wave_market'}
     result={key:copy.deepcopy(value[key]) for key in keys if key in value}
     item_keys={'symbol','name','asof','score','components','reasons','risk_notes','verification'}
     verification_keys={'quote_date','quote_consistent','price_history_complete','chase_passed',
@@ -128,8 +128,15 @@ def public_watchlist(value):
         row={key:copy.deepcopy(raw[key]) for key in item_keys if key in raw}
         if 'short_confirmation' in raw:
             row['short_confirmation']=_public_short_confirmation(raw['short_confirmation'],value.get('data_date'))
-        elif value.get('ranking_policy')=='short-confirmation-observation-v3':
+        elif value.get('ranking_policy') in ('short-confirmation-observation-v3','main-wave-observation-v4'):
             raise ValueError('新版榜单缺少短线方向证据')
+        if value.get('ranking_policy') == 'main-wave-observation-v4':
+            from engine import main_wave
+            if not main_wave.valid(raw.get('main_wave'), value.get('data_date')):
+                raise ValueError('主升浪证据无效')
+            if _quote_instant(raw['main_wave']['sector']['membership_at']) > _quote_instant(value.get('generated_at')):
+                raise ValueError('行业证据来自未来')
+            row['main_wave'] = copy.deepcopy(raw['main_wave'])
         row['verification']=verification(raw.get('verification'), value.get('generated_at'))
         components=raw.get('components',{})
         row['components']={key:copy.deepcopy(components[key]) for key in ('technical','financial','atr_pct','return_5d_pct','ma20_deviation_pct',
@@ -336,11 +343,18 @@ def export_site(output_dir, service, engine_dir=None):
         folder=output/'data/csv';folder.mkdir(parents=True,exist_ok=True)
         (folder/(date+'.csv')).write_text(service.export_csv(date),encoding='utf-8')
     count=0
+    from engine import main_wave
+    wave_index = core.load_history('sh000001').get('bars', [])
+    wave_date = dashboard['meta'].get('data_date')
+    wave_sectors = main_wave.sectors(full_dashboard.get('stocks', []), core.getkv('universe_info', {}), wave_date, moment)
     for stock in [full_dashboard.get('index'), *full_dashboard.get('stocks',[])]:
         if not stock or not re.fullmatch(r'sh\d{6}',stock.get('symbol','')): continue
         history = core.load_history(stock['symbol'])
         chart_bars=[{k:b[k] for k in ('date','close') if k in b} for b in history.get('bars',[])[-180:]]
-        write('data/stocks/'+stock['symbol']+'.json',{'stock':stock,'bars':chart_bars,
+        wave = main_wave.assess(history.get('bars', []), wave_index, stock.get('date'), wave_sectors.get(stock['symbol']))
+        main_wave.apply_stock_gates(wave, stock)
+        wave['sections'] = main_wave.decision(wave)
+        write('data/stocks/'+stock['symbol']+'.json',{'stock':stock,'main_wave':wave,'bars':chart_bars,
             'source':history.get('source'),'backtest':None,
             'backtest_error':'网页未发布逐股原始规则回测；预测模型的时间验证指标见上方。原始规则回测可在本机版查看。'})
         count+=1

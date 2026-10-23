@@ -30,6 +30,7 @@ class WatchlistTests(unittest.TestCase):
             encode=real_core.encode, quote_gate=real_core.quote_gate, exclusion=real_core.exclusion,
             Service=lambda: self.service, load_history=self.history)
         self.patches = [patch.object(watch, 'core', fake_core),
+                        patch.object(watch, 'RANKING_POLICY', 'short-confirmation-observation-v3'),
                         patch.object(watch.md, 'is_trading_day', side_effect=lambda day: self.day(day).weekday() < 5),
                         patch.object(watch.md, 'last_completed_session', side_effect=self.last_completed)]
         for item in self.patches:

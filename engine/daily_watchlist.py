@@ -18,11 +18,12 @@ import core
 import daily_plan
 import forecast
 import market_data as md
+import main_wave
 
 PROTOCOL = 'daily-observation-v1'
 KEY_PREFIX = 'daily_watchlist:'
 TECHNICAL_WEIGHT, FINANCIAL_WEIGHT = .60, .40
-RANKING_POLICY = 'short-confirmation-observation-v3'
+RANKING_POLICY = main_wave.POLICY
 SHORT_CONFIRMATION_PROTOCOL = 'short-confirmation-v1'
 SYMBOL = re.compile(r'sh(?:60[0135]|68[89])\d{3}')
 PRICE_FIELDS = ('entry_low', 'entry_high', 'stop_loss', 'take_profit', 'max_position_pct')
@@ -478,6 +479,17 @@ def build(date=None, service=None, now=None, limit=5):
         benchmark = core.load_history('sh000001').get('bars')
     except Exception:
         benchmark = None
+    wave_market = main_wave.market(benchmark, target)
+    sector_context = main_wave.sectors(stocks, core.getkv('universe_info', {}), target, moment)
+    if RANKING_POLICY == main_wave.POLICY:
+        result['main_wave_market'] = wave_market
+        result['method'] = '主升浪筛选：强市、均线多头、放量突破或缩量回踩、官方行业共振与相对领涨；保留原成本、追高和财务核验。'
+        if wave_market['regime'] in ('weak', 'range'):
+            result.update(status='cash', message='空仓等待：' + wave_market['reason'],
+                          coverage={'universe': len(stocks), 'selected': 0})
+            if result['publication_timing'] != 'prepared':
+                result['published_at'] = moment.isoformat()
+            return result
     ai = core.getkv('ai_review', {})
     review = ai.get('review', {}) if isinstance(ai, dict) else {}
     reviewed = review.get('reviewed_symbols', []) if isinstance(review, dict) else []
@@ -543,6 +555,11 @@ def build(date=None, service=None, now=None, limit=5):
         confirmation, short_failure = _short_confirmation(stock, bars, benchmark, target)
         if confirmation is None:
             exclude(short_failure); continue
+        wave = None
+        if RANKING_POLICY == main_wave.POLICY:
+            wave = main_wave.evidence(bars, benchmark, target, sector_context.get(symbol))
+            if not wave['passed']:
+                exclude('main_wave_' + wave['failure']); continue
         technical = round(max(0, stock['score'] - profile['risk_penalty']), 3)
         score = TECHNICAL_WEIGHT * technical + (FINANCIAL_WEIGHT * financial_score if financial_score is not None else 0)
         risk_reasons = risk.get('reasons') if isinstance(risk.get('reasons'), list) else []
@@ -597,6 +614,8 @@ def build(date=None, service=None, now=None, limit=5):
                 'model_validated': False, 'actionable': False, 'eligible': False,
                 **dict.fromkeys(PRICE_FIELDS)}
         pool.append(item)
+        if wave is not None:
+            item['main_wave'] = wave
     full = [item for item in pool if item['verification']['financial_complete']]
     quality_pool = [item for item in pool if item['verification']['financial_quality_available'] and not item['verification']['financial_complete']]
     selected_pool = pool
@@ -623,6 +642,9 @@ def build(date=None, service=None, now=None, limit=5):
             result['published_at'] = moment.isoformat()
     else:
         result['warnings'].append('既有研究中没有通过必要价格、名称和风险证据检查的观察标的，不拼造候选。')
+        if RANKING_POLICY == main_wave.POLICY:
+            result['message'] = ('空仓等待：' + wave_market['reason'] if wave_market['regime'] in ('weak', 'range')
+                                 else '空仓等待：主升浪或行业共振证据不足')
     return result
 
 
@@ -802,7 +824,7 @@ def _with_alerts(saved, moment, service=None):
 
 def _archived_release(saved, moment, limit, service=None):
     """At 09:00 a genuine preparation freezes, including when seed expired."""
-    if (not isinstance(saved, dict) or saved.get('protocol') != PROTOCOL or saved.get('status') != 'watch_only'
+    if (not isinstance(saved, dict) or saved.get('protocol') != PROTOCOL or saved.get('status') not in ('watch_only', 'cash')
             or saved.get('ranking_policy') != RANKING_POLICY):
         return None
     day = moment.date()
@@ -825,6 +847,16 @@ def _archived_release(saved, moment, limit, service=None):
             return None
     except (md.MarketDataError, ValueError):
         return None
+    if saved.get('status') == 'cash':
+        if (saved.get('items') != [] or saved.get('top_pick') is not None
+                or not main_wave.valid_market(saved.get('main_wave_market'), target)
+                or saved['main_wave_market']['regime'] not in ('weak', 'range')):
+            return None
+        result = copy.deepcopy(saved)
+        result.update(published_at=moment.isoformat(), generated_at=moment.isoformat(),
+                      publication_timing='late' if moment >= release + dt.timedelta(minutes=30) else 'on_time',
+                      late=moment >= release + dt.timedelta(minutes=30))
+        return result
     items, seen = saved.get('items'), set()
     if not isinstance(items, list) or not 1 <= len(items) <= 10:
         return None
@@ -849,6 +881,11 @@ def _archived_release(saved, moment, limit, service=None):
             return None
         seen.add(symbol)
         if not _valid_short_confirmation(item.get('short_confirmation'), target):
+            return None
+        if saved.get('ranking_policy') == main_wave.POLICY and not main_wave.valid(item.get('main_wave'), target):
+            return None
+        if (saved.get('ranking_policy') == main_wave.POLICY
+                and _instant(item['main_wave']['sector']['membership_at']) > generated):
             return None
         risk_keys=('technical_raw','risk_penalty','downside_deviation_60d_pct','max_drawdown_60d_pct','liquidity_proxy_20d_cny')
         if (any(not _number(components.get(key)) for key in risk_keys)
@@ -923,7 +960,7 @@ def publish(date=None, service=None, now=None, limit=5):
         return _with_alerts(existing, moment, service)
     frozen = _archived_release(existing, moment, limit, service) if day == moment.date() else None
     result = frozen or build(day.isoformat(), service=service, now=moment, limit=limit)
-    if result.get('status') != 'watch_only':
+    if result.get('status') not in ('watch_only', 'cash'):
         archived = _archived_release(existing, moment, limit, service) if result.get('status') == 'insufficient_data' else None
         if archived is None:
             if isinstance(existing, dict) and day == moment.date():

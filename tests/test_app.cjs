@@ -21,6 +21,20 @@ function app(options={}){
 function stock(overrides={}){return {symbol:'sh601811',name:'技术分73的样本',score:73,date:'2026-10-16',eligible:false,prediction:{available:true,eligible:false,rank_value:null,expected_return_pct:5},entry_low:10,entry_high:11,stop_loss:9,take_profit:12,...overrides};}
 function qualified(){return stock({eligible:true,chase_risk:{version:'anti-chase-v1',blocked:false,gate_passed:true},prediction:{model_version:'ridge-cycle-v3',validation_protocol:'purged-expanding-3x60-decision-v1',available:true,eligible:true,validation_decision:{protocol:'fixed-nonoverlap-positive-net-v1',eligible:true},rank_value:1,expected_return_pct:2}});}
 const WATCH_NOW=Date.parse('2026-10-20T09:15:00+08:00');
+test('weak-market overlay pauses current recommendations while preserving the original cohort and history',()=>{
+  const a=app({now:WATCH_NOW}),data=watchlist();a.ui.state.dailyWatchlist=data;
+  a.ui.state.dashboard={meta:{data_date:'2026-10-19',expected_date:'2026-10-19',main_wave_market:{protocol:'main-wave-daily-v1',as_of:'2026-10-19',regime:'weak'}}};
+  const original=JSON.stringify(data);a.ui.renderDailyWatchlist(data);
+  assert.equal(a.get('watch-priority-name').textContent,'空仓等待');assert.equal(a.get('watchlist-body').children.length,1);
+  assert.match(a.get('watchlist-summary').textContent,/原始榜单/);assert.equal(JSON.stringify(data),original);
+  a.ui.state.historyDate='2026-10-20';a.ui.renderDailyWatchlist(data);
+  assert.match(a.get('watch-priority-name').textContent,/观察样本/);
+});
+test('a published cash decision is explicit and never fabricates a first pick',()=>{
+  const a=app({now:WATCH_NOW});a.ui.renderDailyWatchlist(watchlist({status:'cash',items:[],top_pick:null,message:'空仓等待：弱势市场'}));
+  assert.equal(a.get('watch-priority-name').textContent,'空仓等待');assert.equal(a.get('watchlist-body').children.length,0);
+  assert.match(a.get('watch-priority-reason').textContent,/弱势市场/);
+});
 function watchlist(overrides={}){
   const first={symbol:'sh600000',name:'观察样本',asof:'2026-10-19',score:73.5,components:{technical:80,financial:63.75},reasons:['量价规则相对靠前','财务字段已取得'],risk_notes:['模型未通过正式买入验证','公告与AI未完整核验'],verification:{announcements_status:'unverified',session_status:'unverified',ai_status:'unverified'},eligible:false,actionable:false,entry_low:9876.54,entry_high:9999.99,stop_loss:8765.43,take_profit:12345.67};
   return {protocol:'daily-observation-v1',date:'2026-10-20',data_date:'2026-10-19',signal_date:'2026-10-19',generated_at:'2026-10-20T08:55:00+08:00',release_at:'2026-10-20T09:00:00+08:00',published_at:'2026-10-20T09:02:00+08:00',publication_timing:'on_time',late:false,status:'watch_only',model_validated:false,items:[first],top_pick:first,verification:first.verification,warnings:[],...overrides};

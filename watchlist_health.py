@@ -142,7 +142,7 @@ def _validate(manifest, watchlist, calendars, moment, expected_version):
 
     if watchlist.get("protocol") != PROTOCOL or watchlist.get("date") != day.isoformat():
         reject("watchlist_identity", "观察榜协议或日期不是当前应验收的官方交易日。")
-    if watchlist.get("status") != "watch_only":
+    if watchlist.get("status") not in ("watch_only", "cash"):
         details["status"] = "insufficient_data"
         reject("watchlist_insufficient", "当日观察榜未形成，保留不足状态，不拼造优选首位。")
     if watchlist.get("data_date") != expected_data or watchlist.get("signal_date") != expected_data:
@@ -192,6 +192,17 @@ def _validate(manifest, watchlist, calendars, moment, expected_version):
     if any(watchlist.get(key) is not False for key in ("model_validated", "eligible", "actionable")):
         reject("watchlist_actionable", "观察榜不得冒充模型已验证或可执行买入建议。")
     items = watchlist.get("items")
+    if watchlist.get('status') == 'cash':
+        from engine import main_wave
+        context = watchlist.get('main_wave_market')
+        if (items != [] or watchlist.get('top_pick') is not None or watchlist.get('ranking_policy') != main_wave.POLICY
+                or not main_wave.valid_market(context, expected_data) or context['regime'] not in ('weak','range')
+                or any(not _trading_day(calendars, dt.date.fromisoformat(d), validated) for d in context['session_dates'])):
+            reject('invalid_cash_decision', '空仓记录缺少可复算的市场证据。')
+        details.update(status='cash' if released else 'prepared', watchlist_ready=released, count=0,
+                       data_date=expected_data, generated_at=generated.isoformat(), published_at=published_value,
+                       publication_timing=timing, message='市场条件不符，已发布空仓等待。')
+        return details
     if not isinstance(items, list) or not 1 <= len(items) <= 10:
         reject("watchlist_items", "观察榜必须有1至10条真实且唯一的观察记录。")
     seen = set()
