@@ -8,7 +8,7 @@
 
 - 来源提交`3ae99acee576a866140d95abecb3187223a3a0de`，实际运行[39892700773](https://github.com/Dopagip00/gup/actions/runs/39892700773)的official-universe、research、deploy、health、cloud-status全部success；盘中无需重跑财务，两个后置财务job按设计skipped。
 - 11:06:04独立公开四JSON验收一次通过：版本2.8.0、generated_at=11:03:10.289632、data_date=expected_data_date=22日。该结果证明新版快照在线和行情日期正确，不证明08:00消息/09:00正式日报准点；正式morning.ready仍false。
-- 真实dashboard的65日主升浪指数证据经main_wave.valid_market重新计算通过，regime=weak。浏览器DOM实际显示今日23日、主升浪策略、空仓等待、弱势市场暂停新增候选；下方显示5只今日原始榜单及主升浪分析按钮。浏览器截图接口和后续详情点击超时，未取得截图或完成详情弹窗的可视验收，不将其记为成功。
+- 真实dashboard的65日主升浪指数证据经main_wave.valid_market重新计算通过，regime=weak。浏览器DOM和11:07首页截图实际显示今日23日、主升浪策略、空仓等待、弱势市场暂停新增候选；下方显示今日原始榜单及主升浪分析按钮。截图已保存本机research/main-wave-2.8-home.png。后续浏览器详情点击及状态读取超时，未完成详情弹窗可视验收；详情JSON和前端回归检查已通过。
 - 独立公开JSON确认23日原五股排序和全部原分数未变：601077/688334/603101/601177/603194，74.230/67.568/62.685/62.352/62.346；原generated_at=07:59:50.869598、published_at=09:11:58.387266完全一致。新版只作用于未发布榜，当前策略暂停不会倒改历史。
 - 601077、601225、600007、601177公开详情均含四模块，概率为null、新增仓位0.00%；601177为high_volume_distribution，601225保留existing_risk_gate。行业数据只是官方行业共振代理，不把它称实时题材龙头。固定主升浪规则/只读影子结果见research/MAIN_WAVE_POLICY.md；没有新收益验证，不承诺准确率提升。
 - 平台296项、公开适配221项、前端76项，共593项回归通过。本机隐藏启动成功，/api/health正确指向本项目、/api/system为2.8.0。源码单独同步，公开seed和个人数据库未上传，不创建备份。维护清单与代码同步，正常业务档案由云端继续保存。
