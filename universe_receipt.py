@@ -209,7 +209,9 @@ def main(argv=None):
         result={'status':'error','receipt_ready':False,'error':type(exc).__name__,'message':'本次官方名单未完整核准，不生成可用转发收据'};code=1
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as stream:stream.write('receipt_ready='+str(result.get('receipt_ready') is True).lower()+'\n')
-    print(_canonical(result));return code
+    # Keep signed receipt serialization unchanged; console must also work on
+    # Windows runners using a non-Chinese legacy output encoding.
+    print(json.dumps(result,ensure_ascii=True,allow_nan=False,sort_keys=True));return code
 
 
 if __name__=='__main__':raise SystemExit(main())

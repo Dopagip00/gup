@@ -68,6 +68,11 @@ test('missing historical message never falls back to latest or disconnects other
   assert(!b.calls.some(url=>url.endsWith('/market-brief.json')));
   const dashboard=await b.api('/api/dashboard');assert.equal(dashboard.meta.data_date,'2026-10-16');
 });
+test('24 media headlines remain available through the public snapshot gateway',async()=>{
+  const value={...brief,items:Array.from({length:24},(_,i)=>({...brief.items[0],id:String(i),url:i%2?'https://wallstreetcn.com/livenews/123':'https://www.cls.cn/detail/123'}))};
+  const b=browser({fetch:async(url,init,fixtures)=>response(url.pathname.endsWith('/market-brief.json')?value:fixtures[url.pathname])});
+  assert.equal((await b.api('/api/market-brief')).items.length,24);
+});
 test('old default message snapshot cannot relabel today and forged future/source messages fail',async()=>{
   const old=browser({fetch:async(url,init,fixtures)=>response(url.pathname.endsWith('/market-brief.json')?{...brief,date:'2026-10-18',generated_at:'2026-10-18T08:10:00+08:00',items:[],coverage:[]}:fixtures[url.pathname])});
   assert.equal((await old.api('/api/market-brief')).items.length,0);

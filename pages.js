@@ -104,11 +104,11 @@
     return {protocol:'market-brief-v1',date,generated_at:null,status,items:[],coverage:[],warnings:['该日没有可核验的真实早间消息快照，未使用其他日期回填。']};
   }
   function validateBrief(value,m,path){
-    const hosts=['www.sse.com.cn','static.sse.com.cn','finance.cctv.com','www.pbc.gov.cn','www.csrc.gov.cn'];
+    const hosts=['www.sse.com.cn','static.sse.com.cn','finance.cctv.com','www.pbc.gov.cn','www.csrc.gov.cn','www.cls.cn','wallstreetcn.com'];
     const urlOk=value=>{try{const u=new URL(value);return u.protocol==='https:'&&hosts.includes(u.hostname)&&!u.username&&!u.password&&!u.search&&!u.hash&&(!u.port||u.port==='443');}catch{return false;}};
     const stamp=value=>typeof value==='string'&&/T.+(?:Z|[+-]\d\d:\d\d)$/.test(value)&&Number.isFinite(Date.parse(value));
     if(value.protocol!=='market-brief-v1'||!validDate(value.date)||!['complete','partial','unavailable','historical_unavailable','closed'].includes(value.status)
-        ||!Array.isArray(value.items)||value.items.length>8||!Array.isArray(value.coverage)||value.coverage.length>8||!Array.isArray(value.warnings))throw Error('早间消息合同无效');
+        ||!Array.isArray(value.items)||value.items.length>24||!Array.isArray(value.coverage)||value.coverage.length>8||!Array.isArray(value.warnings))throw Error('早间消息合同无效');
     if(path.startsWith('data/market-briefs/')&&value.date!==path.slice(-15,-5))throw Error('消息档案日期不一致');
     const generated=Date.parse(value.generated_at),limit=Date.parse(m.generated_at);
     if(value.generated_at!==null&&(!stamp(value.generated_at)||generated>limit||clock(new Date(generated)).date!==value.date))throw Error('消息采集时间无效');

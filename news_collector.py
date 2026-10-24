@@ -33,7 +33,10 @@ CCTV_PAGE = 'https://finance.cctv.com/'
 PBC_PAGE = 'https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html'
 CSRC_PAGE = 'https://www.csrc.gov.cn/'
 SSE_NEWS_PAGE = 'https://www.sse.com.cn/aboutus/mediacenter/hotandd/'
-BRIEF_SOURCES=(('中国人民银行·新闻',PBC_PAGE),('中国证监会·要闻',CSRC_PAGE),('上海证券交易所·热点动态',SSE_NEWS_PAGE))
+CLS_PAGE='https://www.cls.cn/telegraph'
+WSCN_PAGE='https://wallstreetcn.com/live/a-stock'
+BRIEF_SOURCES=(('中国人民银行·新闻',PBC_PAGE),('中国证监会·要闻',CSRC_PAGE),('上海证券交易所·热点动态',SSE_NEWS_PAGE),
+               ('财联社·电报',CLS_PAGE),('华尔街见闻·A股快讯',WSCN_PAGE))
 BRIEF_HOSTS={'www.pbc.gov.cn','www.csrc.gov.cn','www.sse.com.cn'}
 BRIEF_MAX_BYTES=2*1024*1024
 LOOKBACK_DAYS = 4
@@ -504,6 +507,62 @@ def _csrc_headlines(moment,start):
     return [item for item in items if item]
 
 
+def _flash_json(url):
+    """Single bounded public request; failures are distinct from no news."""
+    host=urllib.parse.urlsplit(url).hostname
+    if host not in {'www.cls.cn','api-one-wscn.awtmt.com'}:raise NewsError('unexpected flash publisher')
+    try:
+        request=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0','Referer':CLS_PAGE if host=='www.cls.cn' else WSCN_PAGE})
+        with urllib.request.urlopen(request,timeout=8) as response:
+            _https(response.geturl(),url,{host});raw=response.read(BRIEF_MAX_BYTES+1)
+        if len(raw)>BRIEF_MAX_BYTES:raise NewsError('flash response exceeded limit')
+        return json.loads(raw.decode('utf-8-sig'))
+    except (OSError,ValueError,UnicodeError) as exc:
+        raise NewsError('财经快讯请求或JSON解析失败 ('+type(exc).__name__+')') from exc
+
+
+def parse_flash(payload,source,page,moment,start):
+    """Headline metadata only; no body republication or stock score bonus."""
+    cls=page==CLS_PAGE
+    if (not isinstance(payload,dict) or payload.get('errno' if cls else 'code')!=(0 if cls else 20000)
+            or not isinstance(payload.get('data'),dict)):raise NewsError('财经快讯返回错误状态')
+    rows=payload['data'].get('roll_data' if cls else 'items')
+    if not isinstance(rows,list) or not rows or len(rows)>100:raise NewsError('财经快讯列表为空或结构异常')
+    items=[]
+    for row in rows:
+        if not isinstance(row,dict):raise NewsError('财经快讯条目结构异常')
+        if cls and row.get('is_ad')==1:continue
+        try:
+            stamp=row['ctime' if cls else 'display_time'];ident=str(row['id'])
+            if type(stamp) not in (int,float) or not re.fullmatch(r'\d{1,20}',ident):raise ValueError()
+            published=dt.datetime.fromtimestamp(stamp,CHINA)
+            if published>moment or published.date().isoformat()<start:continue
+            title=row.get('title')
+            if not title and cls:
+                match=re.match(r'【([^】]{1,250})】',str(row.get('brief','')))
+                title=match[1] if match else None
+            if not isinstance(title,str) or not title.strip():continue
+            link='https://www.cls.cn/detail/'+ident if cls else row.get('uri')
+            link=_https(link,page,{'www.cls.cn'} if cls else {'wallstreetcn.com'})
+            parts=urllib.parse.urlsplit(link)
+            if parts.query or parts.fragment or not re.fullmatch(r'/(detail|livenews)/\d{1,20}',parts.path):raise ValueError()
+        except (KeyError,TypeError,ValueError,OverflowError,OSError) as exc:
+            raise NewsError('财经快讯时间或原文链接结构异常') from exc
+        items.append({'title':re.sub(r'<[^>]*>','',unescape(title)).strip()[:250],'url':link,
+            'published_at':published.isoformat(),'published_precision':'second','source':source,
+            'kind':'market_news','source_url':page,'verification':'媒体快讯标题与发布时间；未独立核实报道事实'})
+    return list({item['url']:item for item in items}.values())
+
+
+def _flash_headlines(source,page,moment,start):
+    if page==CLS_PAGE:
+        query='appName=CailianpressWeb&last_time=&os=web&refresh_type=1&rn=50&sv=7.7.5'
+        signature=hashlib.md5(hashlib.sha1(query.encode()).hexdigest().encode()).hexdigest()
+        url='https://www.cls.cn/v1/roll/get_roll_list?'+query+'&sign='+signature
+    else:url='https://api-one-wscn.awtmt.com/apiv1/content/lives?channel=a-stock-channel&limit=50'
+    return parse_flash(_flash_json(url),source,page,moment,start)
+
+
 def _brief_sources(moment,start,*,fixed_observed=None,allow_late=False):
     actual=fixed_observed or _moment()
     if not allow_late and not _window(actual):
@@ -512,15 +571,18 @@ def _brief_sources(moment,start,*,fixed_observed=None,allow_late=False):
     def source(spec):
         name,url=spec
         try:
-            items=_csrc_headlines(moment,start) if url==CSRC_PAGE else parse_official_headlines(_brief_get(url,url),name,url,moment,start)
+            flash=url in (CLS_PAGE,WSCN_PAGE)
+            items=(_flash_headlines(name,url,moment,start) if flash else _csrc_headlines(moment,start)
+                   if url==CSRC_PAGE else parse_official_headlines(_brief_get(url,url),name,url,moment,start))
             observed=fixed_observed or _moment()
             return [dict(item,observed_at=observed.isoformat()) for item in items],{'source':name,'url':url,'status':'complete',
                 'collected_at':observed.isoformat(),'count':len(items),'error':'',
-                'scope':start+'至'+moment.date().isoformat()+'公开首屏有界标题取样；央行/上交所最多32条，证监会最多4条文章日期元数据；未声称全站或全文覆盖'}
+                'scope':('最近50条快讯中处于本次日期窗口的标题；不代表完整时段覆盖，未独立核实报道事实' if flash else
+                         start+'至'+moment.date().isoformat()+'公开首屏标题取样；央行/上交所最多32条，证监会最多4条日期元数据')}
         except NewsError as exc:
             observed=fixed_observed or _moment()
             return [],{'source':name,'url':url,'status':'error','collected_at':observed.isoformat(),'count':0,'error':str(exc),
-                'scope':'本次官方首屏取样失败，不代表没有消息'}
+                'scope':'本次来源取样失败，不代表没有消息'}
     with ThreadPoolExecutor(max_workers=3) as pool:results=list(pool.map(source,BRIEF_SOURCES))
     return [item for items,_ in results for item in items],[coverage for _,coverage in results]
 
@@ -579,16 +641,16 @@ def market_brief(items,coverage,moment):
     for row in ordered:
         if row['_issuer'] and issuers>=2:continue
         issuers+=int(row['_issuer']);selected.append({k:v for k,v in row.items() if not k.startswith('_')})
-        if len(selected)==8:break
+        if len(selected)==24:break
     failures=[source for source in coverage if source['status']!='complete']
-    warnings=['仅按官方标题和固定主题规则选取，重要性不是利好/利空评分，不推断受益股、涨跌或未来收益。',
+    warnings=['仅按来源标题和固定主题规则选取，重要性不是利好/利空评分，不推断受益股、涨跌或未来收益。',
               '优先隔夜及当日已发布消息；不足时保留窗口内较早背景，日期精度不会伪造为具体时分。']
-    if failures:warnings.append('部分官方来源获取或解析失败，请展开来源覆盖；未声称全部消息已读。')
+    if failures:warnings.append('部分来源获取或解析失败，请展开来源覆盖。')
     if len(selected)<5:warnings.append('本次已核验标题少于5条，按真实数量展示，不补造新闻。')
     return {'protocol':'market-brief-v1','date':moment.date().isoformat(),'generated_at':moment.isoformat(),
         'status':'partial' if failures and selected else 'complete' if selected else 'unavailable','items':selected,
         'coverage':coverage[:8],'warnings':warnings,'late':not _window(moment),
-        'scope':'有限官方来源标题与发布时间汇总；未阅读全文，不代表全部消息或收益预测。'}
+        'scope':'官方与财经媒体的有界标题取样；未阅读全文或覆盖全部消息。'}
 
 
 def collect(now=None, *, coverage_start=None):
@@ -632,8 +694,8 @@ def collect(now=None, *, coverage_start=None):
             'semantics': RISK_SEMANTICS, 'error': str(exc)}
         record['errors'].append('上交所31天风险研究观察窗口：' + str(exc))
     # Independent broad context does not relax or alter the strict SSE risk
-    # coverage above. Each added source has one six-second request per page,
-    # at most four CSRC date pages, and only three concurrent publishers.
+    # coverage above. Official pages have six-second bounds; each media feed
+    # has one eight-second request for up to 50 rows. Three concurrent publishers.
     broad_items,broad_coverage=_brief_sources(moment,start,fixed_observed=moment if now is not None else None)
     # In production use completion time; passing now is an explicit deterministic
     # replay/testing boundary, never a fabricated successful earlier timestamp.

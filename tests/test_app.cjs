@@ -258,7 +258,7 @@ test('news page shows all collected items and preserves source date precision',(
   assert.match(a.get('market-brief-items').children[3].textContent,/2026-10-20 · 仅提供日期/);assert.doesNotMatch(a.get('market-brief-items').children[3].textContent,/00:00/);
   assert.match(a.get('market-brief-date').textContent,/2026-10-20.*实际整理/);assert.match(a.get('market-brief-status').textContent,/部分来源缺失/);assert.match(a.get('market-brief-gap').textContent,/证监会/);
 });
-test('valid important news leads the full list, retaining true dates and omitting generic commentary',()=>{
+test('recent important news leads while older background follows current headlines',()=>{
   const a=app({now:WATCH_NOW}),data=marketBrief(),base=data.items[0];
   data.items=[
     {...base,id:'recent',title:'普通最新标题',importance:'normal',importance_reason:'官方近期财经标题，供背景阅读。'},
@@ -268,8 +268,8 @@ test('valid important news leads the full list, retaining true dates and omittin
     {...base,id:'regulation',title:'此前资本市场公告',published_at:'2026-10-19T14:00:00+08:00',importance:'high',topics:['资本市场'],importance_reason:'标题涉及资本市场，值得核对原文。'}
   ];
   const original=structuredClone(data);a.ui.renderMarketBrief(data);
-  assert.deepEqual(a.get('market-brief-items').children.map(row=>row.children[0].textContent),['此前资本市场公告','此前货币政策公告','普通最新标题','普通稍早标题']);
-  assert.equal(a.get('market-brief-items').children[3].children[0].textContent,'普通稍早标题');
+  assert.deepEqual(a.get('market-brief-items').children.map(row=>row.children[0].textContent),['此前资本市场公告','普通最新标题','普通稍早标题','此前货币政策公告']);
+  assert.equal(a.get('market-brief-items').children[2].children[0].textContent,'普通稍早标题');
   assert.match(a.get('market-brief-items').children[0].textContent,/10.?19/);assert.doesNotMatch(a.get('market-brief-items').textContent,/标题涉及资本市场/);
   assert.doesNotMatch(a.get('market-brief-items').textContent,/供背景阅读|无效未来重要消息/);
   assert.match(a.get('market-brief-gap').textContent,/1条消息缺少有效日期或来源时间/);assert.deepEqual(data,original);

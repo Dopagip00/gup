@@ -11,6 +11,7 @@ import html
 import json
 import math
 import os
+import random
 from pathlib import Path
 import re
 import threading
@@ -33,6 +34,17 @@ _CALENDAR_LOCK = threading.Lock()
 _CALENDAR_CACHE = {}
 _REQUEST_LOCK = threading.Lock()
 _LAST_REQUEST = 0.0
+_EM_LOCK = threading.Lock()
+_EM_LAST_REQUEST = 0.0
+
+
+def _em_throttle():
+    """Called under _EM_LOCK: serialize fallback requests, including retries."""
+    global _EM_LAST_REQUEST
+    delay = 1.0 + random.uniform(0.05, 0.25) - (time.monotonic() - _EM_LAST_REQUEST)
+    if delay > 0:
+        time.sleep(delay)
+    _EM_LAST_REQUEST = time.monotonic()
 
 
 def _throttle():
@@ -62,6 +74,14 @@ def _now():
 
 
 def _request(url, *, encoding='utf-8', referer=None, retries=2, timeout=15):
+    host = urllib.parse.urlsplit(url).hostname or ''
+    if host == 'eastmoney.com' or host.endswith('.eastmoney.com'):
+        with _EM_LOCK:
+            return _request_inner(url, encoding=encoding, referer=referer, retries=retries, timeout=timeout, eastmoney=True)
+    return _request_inner(url, encoding=encoding, referer=referer, retries=retries, timeout=timeout)
+
+
+def _request_inner(url, *, encoding, referer, retries, timeout, eastmoney=False):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
                'Accept': '*/*', 'Referer': referer or 'https://finance.qq.com/'}
     host = urllib.parse.urlsplit(url).hostname or 'market provider'
@@ -69,6 +89,8 @@ def _request(url, *, encoding='utf-8', referer=None, retries=2, timeout=15):
     network_only = True
     for attempt in range(retries + 1):
         try:
+            if eastmoney:
+                _em_throttle()
             _throttle()
             # urllib default SSL context verifies certificates and hostnames.
             with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
@@ -271,7 +293,9 @@ def _parse_bars(payload, symbol, adjustment):
         if date in seen:
             raise MarketDataError(f'{symbol}: 历史行情日期重复')
         seen.add(date)
-        # Tencent order: date, open, close, high, low, volume (lots).
+        # newfqkline: OHLCV; STAR volume is shares, other stocks use lots.
+        # The new route's index 8 is amount in 10,000 RMB (live checked
+        # 2026-10-24 against 600519/688981 quotes); do not infer it on old routes.
         bar = {'date': date, 'open': _number(row[1], 'open', positive=True),
                'close': _number(row[2], 'close', positive=True),
                'high': _number(row[3], 'high', positive=True),

@@ -12,6 +12,18 @@ import market_data as md
 
 
 class NetworkErrorTests(unittest.TestCase):
+    def test_eastmoney_retries_are_serialized_and_spaced(self):
+        response=MagicMock();response.__enter__.return_value.read.return_value=b'{}'
+        def request(*args,**kwargs):
+            self.assertTrue(md._EM_LOCK.locked());return response
+        with patch.object(md,'_em_throttle') as throttle,patch.object(md,'_throttle'),patch.object(md.urllib.request,'urlopen',side_effect=request):
+            self.assertEqual(md._request(md.EASTMONEY_HISTORY_SOURCE),'{}');throttle.assert_called_once()
+        with patch.object(md,'_em_throttle') as throttle,patch.object(md,'_throttle'),patch.object(md.time,'sleep'),patch.object(md.urllib.request,'urlopen',side_effect=OSError('offline')):
+            with self.assertRaises(md.MarketNetworkError):md._request(md.EASTMONEY_HISTORY_SOURCE)
+            self.assertEqual(throttle.call_count,3);self.assertFalse(md._EM_LOCK.locked())
+        with patch.object(md.random,'uniform',return_value=.2),patch.object(md.time,'monotonic',return_value=10.5),patch.object(md.time,'sleep') as sleep,patch.object(md,'_EM_LAST_REQUEST',10):
+            md._em_throttle();self.assertAlmostEqual(sleep.call_args.args[0],.7)
+
     def test_transport_and_http_failures_have_a_distinct_safe_type(self):
         for cause in [OSError('private network detail'), md.urllib.error.URLError('private network detail'),
                       md.urllib.error.HTTPError('https://query.sse.com.cn/?private=detail', 403, 'denied', None, None)]:
@@ -72,6 +84,13 @@ def history(rows, kind='qfqday'):
 
 
 class HistoryTests(unittest.TestCase):
+    def test_new_route_amount_and_star_volume_use_different_units(self):
+        payload={'code':0,'data':{'sh688981':{'day':[['2026-10-23','99.46','104.10','104.28','94.80','52490626',{},'2.62','521216.23']]}}}
+        rows,_=md._parse_bars(payload,'sh688981','raw')
+        self.assertEqual(rows[0]['volume_shares'],52490626)
+        self.assertAlmostEqual(rows[0]['volume'],524906.26)
+        self.assertAlmostEqual(rows[0]['amount'],5212162300)
+
     def test_tencent_column_order(self):
         rows, _ = md._parse_bars(history([['2026-10-16', '10', '11', '12', '9', '123']]), 'sh600519', 'qfq')
         self.assertEqual(rows[0]['close'], 11)

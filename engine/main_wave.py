@@ -183,9 +183,21 @@ def decision(report):
     phase = {'volume_breakout': '平台放量突破', 'dry_pullback': '缩量回调确认',
              'high_volume_distribution': '高位放量分歧', 'weak_decline': '弱势下跌',
              'no_setup': '形态未确认', 'unverified': '数据不足'}.get(report.get('phase'), '数据不足')
+    sector = report.get('sector') or {}
+    sector_rank = (f"{sector['industry']} · {sector['rank20']}/{sector['peer_count']}"
+                   if all(k in sector for k in ('industry','rank20','peer_count')) else '行业数据不足')
+    breadth = f"{sector['above_ma20_ratio']*100:.2f}%" if finite(sector.get('above_ma20_ratio')) else '—'
+    facts = [{'label':'均线 MA5 / MA10', 'value':f"{f('ma5')} / {f('ma10')}"},
+             {'label':'均线 MA20 / MA60', 'value':f"{f('ma20')} / {f('ma60')}"},
+             {'label':'均线多头排列', 'value':'已满足' if m.get('trend_aligned') else '未满足' if m else '数据不足'},
+             {'label':'成交量 / 前20日均量', 'value':f('volume_ratio20')+' 倍'},
+             {'label':'20日乖离率', 'value':f('bias20_pct')+'%'},
+             {'label':'上影线占当日振幅', 'value':f"{m['upper_wick_ratio']*100:.2f}%" if finite(m.get('upper_wick_ratio')) else '—'},
+             {'label':'行业20日涨幅排名', 'value':sector_rank},
+             {'label':'同行站上MA20比例', 'value':breadth}]
     return [
-        {'title': '1. 市场情绪与地位判别', 'text': f"{report['market']['reason']} · {phase}；行业共振{'通过' if (report.get('sector') or {}).get('passed') else '未确认'}。主升浪/封板概率未校准。"},
+        {'title': '1. 市场情绪与地位判别', 'text': f"{report['market']['reason']} · {phase}；行业共振{'通过' if sector.get('passed') else '未确认'}。行业排名为官方行业代理。", 'facts':facts},
         {'title': '2. 盘中执行计划', 'text': f"{report['action']}；新增仓位0.00%。缺分时/竞价确认，不提供实时买价或打板指令。"},
         {'title': '3. T+1动态仓位管理', 'text': '当日新买股票次一交易日才可卖；未读取持仓，不生成做T、加减仓比例。'},
-        {'title': '4. 硬性风控与退出机制', 'text': f"复权研究参考：MA10 {f('ma10')}，支撑 {f('support10')}，压力 {f('pressure20')}。实时原价未核验，止损/目标价暂空；跌停可能无法成交。"},
+        {'title': '4. 硬性风控与退出机制', 'text': f"复权研究参考：MA10 {f('ma10')}，10日支撑 {f('support10')}，前20日压力 {f('pressure20')}。突破形态要求日成交量为前20日均量1.50–3.00倍、上影线占振幅不超过35.00%；缩量回踩要求不超过0.80倍。实时原价未核验，止损/目标价暂空；跌停可能无法成交。"},
     ]

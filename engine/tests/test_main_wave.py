@@ -43,6 +43,13 @@ class MainWaveTests(unittest.TestCase):
             self.assertFalse(result['passed']); self.assertEqual(result['action'], '空仓等待')
             self.assertTrue(result['failure'].startswith('market_'))
 
+    def test_detail_facts_do_not_change_frozen_evidence(self):
+        result=wave.evidence(self.rows,self.index,self.target,sector());original=copy.deepcopy(result)
+        facts={item['label']:item['value'] for item in wave.decision(result)[0]['facts']}
+        self.assertEqual(facts['成交量 / 前20日均量'],'1.80 倍')
+        self.assertEqual(facts['同行站上MA20比例'],'80.00%')
+        self.assertEqual(result,original);self.assertTrue(wave.valid(result,self.target))
+
     def test_intraday_distribution_and_excessive_volume_do_not_become_breakouts(self):
         for volume, high in ((180, 16), (700, self.rows[-1]['high'])):
             rows = copy.deepcopy(self.rows); rows[-1].update(volume=volume, high=high)

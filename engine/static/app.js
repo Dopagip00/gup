@@ -237,7 +237,10 @@ function renderDetail() {
   const d=state.detailData;if(!d)return;const s=d.stock, historical=d.historical, valid=!s.stale && !s.excluded && !historical;
   $('detail-loading').hidden=true;$('detail-content').hidden=false;
   const wave=clear($('main-wave-details'));wave.hidden=!!historical||!d.main_wave;
-  if(!wave.hidden)for(const section of list(d.main_wave.sections)){wave.append(node('h3','',section.title),node('p','',section.text));}
+  if(!wave.hidden)for(const section of list(d.main_wave.sections)){
+    wave.append(node('h3','',section.title),node('p','',section.text));
+    if(list(section.facts).length){const grid=node('dl','wave-facts');for(const fact of section.facts){const box=node('div');box.append(node('dt','',fact.label),node('dd','',fact.value));grid.append(box);}wave.append(grid);}
+  }
   text('detail-price',number(s.raw_close ?? s.close));setChange('detail-change',s.change_pct);text('detail-score',`${number(s.score,0)} / 100（技术分，非概率）`);text('detail-signal',s.stale?'过期 / 离线 · 非推荐':s.excluded?'排除项 · 非推荐':shortEligible(s)?'验证合格候选':'未通过研究 · 非推荐');
   $('detail-signal').className=`pill ${shortEligible(s)?'positive':s.stale?'warn':'neutral'}`;
   let warnings=list(s.warnings).map(String);if(s.excluded)warnings.unshift(s.exclusion_reason || '该股属于排除的权重指标股，仅作参考，不进入短线首选。');if(s.prediction && !s.prediction.eligible)warnings.unshift('预测验证未通过；如下方有价位，仅为研究参考，不构成买入建议，请勿据此强行买入。');if(historical)warnings.unshift('当前为历史研究快照。买入参考与模拟委托不可用于当前交易，历史回测未在此重算。');else if(s.stale)warnings.unshift('行情尚未达到目标交易日，暂停价位建议和模拟买入。');
@@ -549,7 +552,7 @@ function briefInstant(value) {
 }
 function briefLink(value) {
   try {
-    const url=new URL(value),hosts=['www.sse.com.cn','static.sse.com.cn','finance.cctv.com','www.pbc.gov.cn','www.csrc.gov.cn'];
+    const url=new URL(value),hosts=['www.sse.com.cn','static.sse.com.cn','finance.cctv.com','www.pbc.gov.cn','www.csrc.gov.cn','www.cls.cn','wallstreetcn.com'];
     if(url.protocol==='https:'&&hosts.includes(url.hostname)&&!url.username&&!url.password&&(!url.port||url.port==='443')
        && ![...url.searchParams.keys()].some(key=>/token|password|secret|cookie|authorization|api.?key/i.test(key)))return url.href;
   }catch{}
@@ -580,7 +583,7 @@ function renderMarketBrief(data,options={},expected=state.newsDate||shanghaiDay(
   if(failed.length)warnings.unshift(`来源缺口：${failed.join('、')}`);
   const known=['complete','partial'].includes(data.status)&&Number.isFinite(generated)&&generated<=now;
   let rejected=0,count=0;const valid=[];
-  if(known)for(const [order,item] of list(data.items).slice(0,8).entries()){
+  if(known)for(const [order,item] of list(data.items).slice(0,24).entries()){
     if(!item||typeof item!=='object'||typeof item.title!=='string'||!item.title.trim()){rejected++;continue;}
     const collected=briefInstant(item.collected_at),precision=item.published_precision;
     const published=precision==='day'&&typeof item.published_at==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(item.published_at)?Date.parse(item.published_at+'T00:00:00+08:00'):['minute','second'].includes(precision)?briefInstant(item.published_at):NaN;
@@ -588,7 +591,8 @@ function renderMarketBrief(data,options={},expected=state.newsDate||shanghaiDay(
        ||precision==='day'&&shanghaiDay(new Date(published))!==item.published_at){rejected++;continue;}
     valid.push({item,published,precision,order});
   }
-  valid.sort((a,b)=>Number(b.item.importance==='high')-Number(a.item.importance==='high')||b.published-a.published||a.order-b.order);
+  const recent=row=>row.published>=generated-20*3600000||row.precision==='day'&&row.item.published_at>=shanghaiDay(new Date(generated-20*3600000));
+  valid.sort((a,b)=>Number(recent(b))-Number(recent(a))||Number(b.item.importance==='high')-Number(a.item.importance==='high')||b.published-a.published||a.order-b.order);
   for(const {item,precision} of valid){
     const article=node('article','market-brief-item'),heading=node('h3'),title=item.title.replace(/[\x00-\x1f\x7f]/g,' ').slice(0,300),url=briefLink(item.url);
     if(url){const link=node('a','',title);link.href=url;link.target='_blank';link.rel='noopener noreferrer';heading.append(link);}else heading.textContent=title;
@@ -603,7 +607,7 @@ function renderMarketBrief(data,options={},expected=state.newsDate||shanghaiDay(
   if(rejected)warnings.push(`${rejected}条消息缺少有效日期或来源时间，暂未展示。`);
   $('market-brief-empty').hidden=count>0;
   if(!count)empty(data.status==='closed'?'官方交易日历休市，无当日早间消息记录。':data.status==='historical_unavailable'?`${expected} 暂无当时保存的消息，未使用今天的信息回填。`:known?'当前窗口暂无可展示的重要消息。':'尚未取得完整来源记录。');
-  const concreteGap=warnings.find(note=>!/仅按官方标题|重要性不是利好|不推断受益股|^优先隔夜及当日已发布消息|^本次为实际晚到消息更新/.test(note));
+  const concreteGap=warnings.find(note=>!/仅按(官方|来源)标题|重要性不是利好|不推断受益股|^优先隔夜及当日已发布消息|^本次为实际晚到消息更新/.test(note));
   if(concreteGap){$('market-brief-gap').hidden=false;text('market-brief-gap',concreteGap);}
   const sourceNotes=coverage.map(row=>`${row.source||'来源未提供'}：${({complete:'已收集',partial:'部分收集',error:'未取得'}[row.status]||'待核验')}${row.collected_at?`，${shortTime(row.collected_at)}`:''}`);
   text('market-brief-warnings',[...new Set([...warnings,...sourceNotes])].join('\n'));

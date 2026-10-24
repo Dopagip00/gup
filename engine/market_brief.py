@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 PROTOCOL='market-brief-v1'
 KEY_PREFIX='market_brief:'
 TZ=dt.timezone(dt.timedelta(hours=8))
-HOSTS={'www.sse.com.cn','static.sse.com.cn','finance.cctv.com','www.pbc.gov.cn','www.csrc.gov.cn'}
+HOSTS={'www.sse.com.cn','static.sse.com.cn','finance.cctv.com','www.pbc.gov.cn','www.csrc.gov.cn','www.cls.cn','wallstreetcn.com'}
 STATUSES={'complete','partial','unavailable','historical_unavailable','closed'}
 
 
@@ -31,13 +31,13 @@ def _text(value,limit):
 def _url(value):
     parts=urlsplit(value)
     if (parts.scheme!='https' or parts.hostname not in HOSTS or parts.username or parts.password
-            or parts.port not in (None,443) or parts.query or parts.fragment):raise ValueError('消息链接不是允许的官方原文')
+            or parts.port not in (None,443) or parts.query or parts.fragment):raise ValueError('消息链接不是允许的来源原文')
     return value
 
 
 def empty(date,status='unavailable',warning='该日尚无真实采集的早间消息，未使用其他日期回填。'):
     return {'protocol':PROTOCOL,'date':date,'generated_at':None,'status':status,'items':[],
-            'coverage':[],'warnings':[warning],'scope':'有限官方来源标题与发布时间汇总；未阅读全文，不代表全部消息或收益预测。'}
+            'coverage':[],'warnings':[warning],'scope':'官方与财经媒体的有界标题取样；未阅读全文或覆盖全部消息。'}
 
 
 def public(value,*,date,now):
@@ -48,7 +48,7 @@ def public(value,*,date,now):
     generated=_stamp(value['generated_at']) if value.get('generated_at') else None
     if generated and (generated.date()!=day or generated>moment):raise ValueError('消息生成时间无效或来自未来')
     rows=value.get('items');sources=value.get('coverage')
-    if not isinstance(rows,list) or len(rows)>8 or not isinstance(sources,list) or len(sources)>8:raise ValueError('消息条目超过限制')
+    if not isinstance(rows,list) or len(rows)>24 or not isinstance(sources,list) or len(sources)>8:raise ValueError('消息条目超过限制')
     if value['status']=='complete' and not rows:raise ValueError('没有标题不能声称完整采集')
     result=empty(date,value['status']);result['generated_at']=generated.isoformat() if generated else None
     result['late']=value.get('late') is True

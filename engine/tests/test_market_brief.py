@@ -20,6 +20,14 @@ def document():
 
 
 class BriefTests(unittest.TestCase):
+    def test_media_sources_and_24_items_survive_public_projection(self):
+        raw=document();raw['items']=[dict(raw['items'][0],id=str(i),url='https://www.cls.cn/detail/'+str(i)) for i in range(24)]
+        raw['items'][1]['url']='https://wallstreetcn.com/livenews/123'
+        value=brief.public(raw,date='2026-10-21',now=NOW)
+        self.assertEqual(len(value['items']),24)
+        raw['items'].append(raw['items'][0])
+        with self.assertRaises(ValueError):brief.public(raw,date='2026-10-21',now=NOW)
+
     def core(self,values=None):
         return SimpleNamespace(now=lambda:NOW,md=SimpleNamespace(is_trading_day=lambda day:True),
             getkv=lambda key,default=None:(values or {}).get(key,default))

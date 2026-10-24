@@ -351,16 +351,16 @@ class BroadBriefTests(unittest.TestCase):
                 'published_at':'2026-10-19','published_precision':'date','observed_at':NOW.isoformat(),
                 'source':'央行','kind':'market_news','verification':'官方目录，未读正文'})
         items.append(dict(items[0]));value=news.market_brief(items,[],NOW)
-        self.assertEqual(len(value['items']),8);self.assertEqual(len({row['title'] for row in value['items']}),8)
+        self.assertEqual(len(value['items']),12);self.assertEqual(len({row['title'] for row in value['items']}),12)
         self.assertEqual(value['items'][0]['impact'],'macro');self.assertNotIn('beneficiary_symbols',value)
         self.assertTrue(all(row['published_precision']=='day' for row in value['items']))
         insurance=dict(items[0],title='推动普惠保险由风险补偿向风险减量转型')
         self.assertEqual(news.market_brief([insurance],[],NOW)['items'][0]['impact'],'general')
 
     def test_failed_source_is_visible_and_does_not_claim_no_news(self):
-        with patch.object(news,'_brief_get',side_effect=news.NewsError('SSL error')),patch.object(news,'_csrc_headlines',side_effect=news.NewsError('format failed')):
+        with patch.object(news,'_brief_get',side_effect=news.NewsError('SSL error')),patch.object(news,'_csrc_headlines',side_effect=news.NewsError('format failed')),patch.object(news,'_flash_headlines',side_effect=news.NewsError('unavailable')):
             items,coverage=news._brief_sources(NOW,'2026-10-15',fixed_observed=NOW)
-        self.assertEqual(items,[]);self.assertEqual(len(coverage),3)
+        self.assertEqual(items,[]);self.assertEqual(len(coverage),5)
         self.assertTrue(all(row['status']=='error' and row['collected_at']==NOW.isoformat() for row in coverage))
 
     def test_late_brief_is_independent_real_time_and_never_claims_verified_morning(self):
@@ -372,6 +372,37 @@ class BroadBriefTests(unittest.TestCase):
         self.assertTrue(value['late']);self.assertEqual(value['generated_at'],late.isoformat())
         self.assertEqual(value['date'],'2026-10-19');self.assertNotEqual(value['status'],'verified')
         self.assertTrue(sources.call_args.kwargs['allow_late']);self.assertTrue(any('晚到' in message for message in value['warnings']))
+
+
+class FlashTests(unittest.TestCase):
+    def test_both_publishers_keep_beijing_time_and_canonical_links(self):
+        for cls in (True,False):
+            page=news.CLS_PAGE if cls else news.WSCN_PAGE
+            row={'id':123,'title':'测试快讯','ctime':NOW.timestamp(),'display_time':NOW.timestamp(),
+                 'uri':'https://wallstreetcn.com/livenews/123','content':'不应公开复制的正文'}
+            data={('errno' if cls else 'code'):0 if cls else 20000,'data':{('roll_data' if cls else 'items'):[row]}}
+            result=news.parse_flash(data,'媒体',page,NOW,'2026-10-16')
+            self.assertEqual(result[0]['published_at'],NOW.isoformat())
+            self.assertEqual(result[0]['published_precision'],'second')
+            self.assertTrue(result[0]['url'].endswith('/123'));self.assertNotIn('content',result[0])
+            row['ctime']=row['display_time']=NOW.timestamp()+1
+            self.assertEqual(news.parse_flash(data,'媒体',page,NOW,'2026-10-16'),[])
+            row['ctime']=row['display_time']=True
+            with self.assertRaises(news.NewsError):news.parse_flash(data,'媒体',page,NOW,'2026-10-16')
+
+    def test_error_empty_and_external_link_never_become_clean_coverage(self):
+        cases=[{'code':500,'data':{'items':[]}}, {'code':20000,'data':{'items':[]}},
+               {'code':20000,'data':{'items':[{'id':1,'title':'标题','display_time':NOW.timestamp(),'uri':'https://evil.test/1'}]}}]
+        for data in cases:
+            with self.assertRaises(news.NewsError):news.parse_flash(data,'媒体',news.WSCN_PAGE,NOW,'2026-10-16')
+
+    def test_old_ad_and_untitled_body_are_not_republished_as_new_headlines(self):
+        rows=[{'id':1,'ctime':NOW.timestamp(),'title':'广告','is_ad':1},
+              {'id':2,'ctime':NOW.timestamp(),'brief':'正文不是标题'},
+              {'id':3,'ctime':NOW.timestamp(),'brief':'【明确标题】不要复制正文'},
+              {'id':4,'ctime':NOW.timestamp()-10*86400,'title':'过时内容'}]
+        result=news.parse_flash({'errno':0,'data':{'roll_data':rows}},'财联社',news.CLS_PAGE,NOW,'2026-10-16')
+        self.assertEqual([item['title'] for item in result],['明确标题'])
 
 
 if __name__ == '__main__':
