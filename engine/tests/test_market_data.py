@@ -264,6 +264,7 @@ class UniverseQuoteTests(unittest.TestCase):
         fields = ['0'] * 50
         for i, v in {1: '贵州茅台', 3: '1329', 4: '1312.97', 5: '1311.57', 6: '38502', 30: '20261016161447', 32: '1.22', 33: '1329.88', 34: '1301.68', 39: '20.4', 46: '6.61', 45: '16613.58', 44: '16613.58'}.items():
             fields[i] = v
+        fields[38]='0.46'
         text = 'v_sh600519="' + '~'.join(fields) + '";'
         row = md._parse_quotes(text, ['sh600519'])['sh600519']
         self.assertEqual(row['price'], 1329)
@@ -272,6 +273,8 @@ class UniverseQuoteTests(unittest.TestCase):
         self.assertEqual(row['pe'], 20.4)
         self.assertEqual(row['pb'], 6.61)
         self.assertEqual(row['market_cap_100m'], 16613.58)
+        self.assertEqual(row['circulating_cap_100m'],16613.58)
+        self.assertEqual(row['turnover_ratio'],.46)
         with self.assertRaises(md.MarketDataError):
             md._parse_quotes(text, ['sh600519', 'sh600000'])
 

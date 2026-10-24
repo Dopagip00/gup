@@ -22,6 +22,7 @@ import market_data as md
 import strategy
 import forecast
 import main_wave
+import technical_diagnosis
 
 BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('ASHARE_DATA_DIR', str(BASE / 'data'))).resolve()
@@ -843,7 +844,9 @@ class Service:
         wave = main_wave.assess(history['bars'], ix, result.get('date'))
         main_wave.apply_stock_gates(wave, result)
         wave['sections'] = main_wave.decision(wave)
-        return {'stock': result, 'main_wave': wave, 'bars': history['bars'], 'backtest': backtest, 'backtest_error': backtest_error, 'source': history.get('source')}
+        diagnosis=technical_diagnosis.diagnose(history['bars'],symbol,result.get('date'),quote=valuation,now=now(),
+            calendar=technical_diagnosis.calendar_for(result.get('date'),md.get_calendar))
+        return {'stock': result, 'main_wave': wave, 'technical_diagnosis':diagnosis, 'bars': history['bars'], 'backtest': backtest, 'backtest_error': backtest_error, 'source': history.get('source')}
 
     def poll_quotes(self):
         if not is_open():

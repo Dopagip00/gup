@@ -459,7 +459,7 @@ def _parse_quotes(text, requested=None):
             raise MarketDataError(f'{symbol}: 报价日期或数字异常') from exc
         row.update(_flags(symbol, row['name']))
         row['volume_shares'] = row['volume'] * 100
-        for key, index in (('pe', 39), ('pb', 46), ('market_cap_100m', 45), ('circulating_cap_100m', 44)):
+        for key, index in (('pe', 39), ('pb', 46), ('market_cap_100m', 45), ('circulating_cap_100m', 44), ('turnover_ratio', 38)):
             row[key] = _optional_number(fields[index]) if len(fields) > index else None
         amount = _optional_number(fields[37]) if len(fields) > 37 else None
         row['amount'] = amount * 10000 if amount is not None else None

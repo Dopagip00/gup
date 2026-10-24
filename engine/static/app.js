@@ -241,6 +241,16 @@ function renderDetail() {
     wave.append(node('h3','',section.title),node('p','',section.text));
     if(list(section.facts).length){const grid=node('dl','wave-facts');for(const fact of section.facts){const box=node('div');box.append(node('dt','',fact.label),node('dd','',fact.value));grid.append(box);}wave.append(grid);}
   }
+  let diagnostic=$('technical-diagnosis');if(!diagnostic){diagnostic=node('section','detail-prediction');diagnostic.id='technical-diagnosis';wave.after(diagnostic);}clear(diagnostic);
+  diagnostic.hidden=!!historical||!d.technical_diagnosis;
+  if(!diagnostic.hidden){
+    const report=d.technical_diagnosis;diagnostic.append(node('h2','','深度技术诊断'));
+    if(report.status!=='complete')diagnostic.append(node('p','',report.reason||'技术数据待补充'));
+    else for(const section of list(report.sections)){
+      diagnostic.append(node('h3','',section.title),node('p','',section.text));
+      if(list(section.facts).length){const grid=node('dl','wave-facts');for(const fact of section.facts){const box=node('div');box.append(node('dt','',fact.label),node('dd','',fact.value));grid.append(box);}diagnostic.append(grid);}
+    }
+  }
   text('detail-price',number(s.raw_close ?? s.close));setChange('detail-change',s.change_pct);text('detail-score',`${number(s.score,0)} / 100（技术分，非概率）`);text('detail-signal',s.stale?'过期 / 离线 · 非推荐':s.excluded?'排除项 · 非推荐':shortEligible(s)?'验证合格候选':'未通过研究 · 非推荐');
   $('detail-signal').className=`pill ${shortEligible(s)?'positive':s.stale?'warn':'neutral'}`;
   let warnings=list(s.warnings).map(String);if(s.excluded)warnings.unshift(s.exclusion_reason || '该股属于排除的权重指标股，仅作参考，不进入短线首选。');if(s.prediction && !s.prediction.eligible)warnings.unshift('预测验证未通过；如下方有价位，仅为研究参考，不构成买入建议，请勿据此强行买入。');if(historical)warnings.unshift('当前为历史研究快照。买入参考与模拟委托不可用于当前交易，历史回测未在此重算。');else if(s.stale)warnings.unshift('行情尚未达到目标交易日，暂停价位建议和模拟买入。');

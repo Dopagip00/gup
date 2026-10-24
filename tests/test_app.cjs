@@ -5,6 +5,7 @@ class Element{
   constructor(tag='div'){this.tag=tag;this.children=[];this.hidden=false;this.value='';this.checked=false;this.style={};this._text='';this.classList={toggle(){},add(){},remove(){}};}
   set textContent(value){this._text=String(value);this.children=[];}
   get textContent(){return this._text+this.children.map(x=>x.textContent??String(x)).join('');}
+  get childNodes(){return this.children;}
   append(...nodes){for(const node of nodes)node?.tag==='#fragment'?this.append(...node.children):this.children.push(node);}
   replaceChildren(...nodes){this._text='';this.children=[];this.append(...nodes);}
   setAttribute(){}addEventListener(){}after(){}prepend(...nodes){this.children.unshift(...nodes);}getBoundingClientRect(){return {width:0,height:0};}
@@ -20,6 +21,16 @@ function app(options={}){
 }
 function stock(overrides={}){return {symbol:'sh601811',name:'技术分73的样本',score:73,date:'2026-10-16',eligible:false,prediction:{available:true,eligible:false,rank_value:null,expected_return_pct:5},entry_low:10,entry_high:11,stop_loss:9,take_profit:12,...overrides};}
 function qualified(){return stock({eligible:true,chase_risk:{version:'anti-chase-v1',blocked:false,gate_passed:true},prediction:{model_version:'ridge-cycle-v3',validation_protocol:'purged-expanding-3x60-decision-v1',available:true,eligible:true,validation_decision:{protocol:'fixed-nonoverlap-positive-net-v1',eligible:true},rank_value:1,expected_return_pct:2}});}
+test('technical diagnosis is shown as dated facts and never imported into a historical view',async()=>{
+  const a=app(),s=stock({reasons:['已有规则依据']});
+  a.ui.setApi(async()=>({stock:s,bars:[],technical_diagnosis:{status:'complete',sections:[{title:'技术指标',text:'MACD(12,26,9)',facts:[{label:'RSI14',value:'62.50'}]}]}}));
+  await a.ui.openStock(s);
+  assert.equal(a.get('detail-content').hidden,false);assert.equal(a.get('technical-diagnosis').hidden,false);
+  assert.match(a.get('technical-diagnosis').textContent,/MACD\(12,26,9\).*RSI14.*62.50/);
+  assert.equal(s.score,73);assert.equal(s.eligible,false);
+  a.ui.state.historyDate='2026-10-16';await a.ui.openStock(s);
+  assert.equal(a.get('technical-diagnosis').hidden,true);assert.equal(a.get('technical-diagnosis').textContent,'');
+});
 const WATCH_NOW=Date.parse('2026-10-20T09:15:00+08:00');
 test('weak-market overlay pauses current recommendations while preserving the original cohort and history',()=>{
   const a=app({now:WATCH_NOW}),data=watchlist();a.ui.state.dailyWatchlist=data;

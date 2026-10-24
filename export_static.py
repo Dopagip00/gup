@@ -343,9 +343,11 @@ def export_site(output_dir, service, engine_dir=None):
         folder=output/'data/csv';folder.mkdir(parents=True,exist_ok=True)
         (folder/(date+'.csv')).write_text(service.export_csv(date),encoding='utf-8')
     count=0
-    from engine import main_wave
+    from engine import main_wave, technical_diagnosis
     wave_index = core.load_history('sh000001').get('bars', [])
     wave_date = dashboard['meta'].get('data_date')
+    technical_calendar=technical_diagnosis.calendar_for(wave_date,core.md.get_calendar)
+    technical_quotes=core.getkv('valuation_quotes',{}).get('quotes',{})
     wave_sectors = main_wave.sectors(full_dashboard.get('stocks', []), core.getkv('universe_info', {}), wave_date, moment)
     for stock in [full_dashboard.get('index'), *full_dashboard.get('stocks',[])]:
         if not stock or not re.fullmatch(r'sh\d{6}',stock.get('symbol','')): continue
@@ -354,7 +356,9 @@ def export_site(output_dir, service, engine_dir=None):
         wave = main_wave.assess(history.get('bars', []), wave_index, stock.get('date'), wave_sectors.get(stock['symbol']))
         main_wave.apply_stock_gates(wave, stock)
         wave['sections'] = main_wave.decision(wave)
-        write('data/stocks/'+stock['symbol']+'.json',{'stock':stock,'main_wave':wave,'bars':chart_bars,
+        diagnosis=technical_diagnosis.diagnose(history.get('bars',[]),stock['symbol'],stock.get('date'),
+            calendar=technical_calendar,quote=technical_quotes.get(stock['symbol']),now=moment)
+        write('data/stocks/'+stock['symbol']+'.json',{'stock':stock,'main_wave':wave,'technical_diagnosis':diagnosis,'bars':chart_bars,
             'source':history.get('source'),'backtest':None,
             'backtest_error':'网页未发布逐股原始规则回测；预测模型的时间验证指标见上方。原始规则回测可在本机版查看。'})
         count+=1
