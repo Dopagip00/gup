@@ -236,6 +236,20 @@ async function openStock(stock) {
 function renderDetail() {
   const d=state.detailData;if(!d)return;const s=d.stock, historical=d.historical, valid=!s.stale && !s.excluded && !historical;
   $('detail-loading').hidden=true;$('detail-content').hidden=false;
+  let screen=$('factor-screen');if(!screen){screen=node('details','detail-prediction');screen.id='factor-screen';$('main-wave-details').after(screen);}clear(screen);
+  const screening=d.factor_screen;
+  screen.hidden=!!historical||!screening||screening.symbol!==s.symbol||screening.as_of!==s.date;
+  if(!screen.hidden){
+    const labels={pass:'符合',fail:'不符',unknown:'缺数据'};
+    screen.append(node('summary','','多因子条件核对'));
+    for(const group of list(screening.groups)){
+      screen.append(node('h3','',`${group.name} · ${labels[group.status]||'缺数据'}`));
+      const grid=node('dl','wave-facts');
+      for(const item of list(group.items)){const box=node('div');box.append(node('dt','',item.label),node('dd','',`${labels[item.status]||'缺数据'}${numeric(item.value)?` · ${number(item.value)}${item.unit||''}`:''}`),node('span','',item.rule));grid.append(box);}screen.append(grid);
+    }
+    if(screening.financial_report_date)screen.append(node('p','',`财报 ${screening.financial_report_date} · 公告 ${screening.financial_publication_date} · 年度ROE ${screening.roe_report_date}`));
+    screen.append(node('p','',`未接入：${list(screening.unavailable_dimensions).join('、')}`));
+  }
   const wave=clear($('main-wave-details'));wave.hidden=!!historical||!d.main_wave;
   if(!wave.hidden)for(const section of list(d.main_wave.sections)){
     wave.append(node('h3','',section.title),node('p','',section.text));

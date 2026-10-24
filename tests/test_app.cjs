@@ -32,6 +32,16 @@ test('technical diagnosis is shown as dated facts and never imported into a hist
   assert.equal(a.get('technical-diagnosis').hidden,true);assert.equal(a.get('technical-diagnosis').textContent,'');
 });
 const WATCH_NOW=Date.parse('2026-10-20T09:15:00+08:00');
+test('factor checks show failures and missing data without changing the score or leaking into history',async()=>{
+  const a=app(),s=stock({reasons:['已有依据']});
+  const factor_screen={symbol:s.symbol,as_of:s.date,groups:[{name:'财务与估值',status:'fail',items:[{label:'年度ROE',status:'fail',value:2,unit:'%',rule:'≥8%'},{label:'PE',status:'unknown',value:null,rule:'0 < PE ≤ 40'}]}],unavailable_dimensions:['实时资金流']};
+  a.ui.setApi(async()=>({stock:s,bars:[],factor_screen}));await a.ui.openStock(s);
+  assert.equal(a.get('factor-screen').hidden,false);
+  assert.match(a.get('factor-screen').textContent,/年度ROE不符.*2\.00%.*PE缺数据/);
+  assert.match(a.get('factor-screen').textContent,/未接入：实时资金流/);assert.equal(s.score,73);
+  a.ui.state.historyDate=s.date;await a.ui.openStock(s);assert.equal(a.get('factor-screen').hidden,true);assert.equal(a.get('factor-screen').textContent,'');
+  a.ui.state.historyDate='';factor_screen.as_of='2026-10-15';await a.ui.openStock(s);assert.equal(a.get('factor-screen').hidden,true);
+});
 test('weak-market overlay pauses current recommendations while preserving the original cohort and history',()=>{
   const a=app({now:WATCH_NOW}),data=watchlist();a.ui.state.dailyWatchlist=data;
   a.ui.state.dashboard={meta:{data_date:'2026-10-19',expected_date:'2026-10-19',main_wave_market:{protocol:'main-wave-daily-v1',as_of:'2026-10-19',regime:'weak'}}};

@@ -76,7 +76,8 @@ class WatchlistTests(unittest.TestCase):
                 'score': 80, 'eligible': True, 'pe_ttm': 15, 'pb': 2, 'roe': 10,
                 'revenue_growth': 8, 'profit_growth': 12, 'operating_cash_to_profit': 1,
                 'recurring_profit_ratio': .8, 'debt_ratio': 40, 'ttm_parent_netprofit_100m': 2,
-                'report_date': '2026-06-30', 'publication_date': '2026-08-20', 'provider_update_date': '2026-08-20'}
+                'report_date': '2026-06-30', 'publication_date': '2026-08-20', 'provider_update_date': '2026-08-20',
+                'roe_report_date': '2025-12-31', 'roe_publication_date': '2026-04-20'}
 
     def history(self, symbol):
         if symbol in self.histories:
@@ -140,6 +141,25 @@ class WatchlistTests(unittest.TestCase):
         for stock in self.stocks:
             stock['prediction']['expected_return_pct'] *= 100
         self.assertEqual(self.symbols(result), self.symbols(self.build()))
+
+    def test_unknown_annual_disclosure_cannot_receive_financial_weight_or_priority(self):
+        for record in self.finance['stocks']:
+            record['roe_publication_date'] = '2026-10-21'
+            record['score'] = 100
+        result = self.build()
+        self.assertEqual(result['coverage']['complete_financial'], 0)
+        self.assertEqual(result['coverage']['disclosed_quality_financial'], 0)
+        for item in result['items']:
+            self.assertIsNone(item['components']['financial'])
+            self.assertLessEqual(item['score'], 60)
+
+    def test_financial_evidence_fix_does_not_rewrite_published_cohort(self):
+        original = watch.publish(service=self.service, now=self.moment)
+        for record in self.finance['stocks']:
+            record.pop('roe_publication_date')
+        repeated = watch.publish(service=self.service, now=self.moment)
+        self.assertEqual(self.symbols(repeated), self.symbols(original))
+        self.assertEqual([r['score'] for r in repeated['items']], [r['score'] for r in original['items']])
 
     def test_short_model_is_only_a_current_negative_veto_never_a_validation_promotion(self):
         original = copy.deepcopy(self.stocks[5]['prediction'])
@@ -564,6 +584,9 @@ class WatchlistTests(unittest.TestCase):
 
     def test_intraday_previous_close_corrobation_is_only_an_unqualified_observation(self):
         self.intraday_quotes()
+        # No annual disclosure evidence: neither complete valuation nor quality reuse.
+        for row in self.finance['stocks']:
+            row.pop('roe_publication_date')
         result = self.build()
         self.assertEqual(result['status'], 'watch_only')
         self.assertEqual(result['published_at'], self.moment.isoformat())

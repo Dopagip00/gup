@@ -19,6 +19,7 @@ import daily_plan
 import forecast
 import market_data as md
 import main_wave
+import factor_screen
 
 PROTOCOL = 'daily-observation-v1'
 KEY_PREFIX = 'daily_watchlist:'
@@ -149,6 +150,8 @@ def _known_risks(moment, target=None):
 
 
 def _financial(record, snapshot, target, moment):
+    if not factor_screen.financial_dates_valid(record, snapshot, target, moment):
+        return False
     if not isinstance(record, dict) or snapshot.get('as_of') != target or record.get('date') != target or record.get('quote_date') != target:
         return False
     fetched = _instant(snapshot.get('fetched_at'))
@@ -170,6 +173,8 @@ def _financial(record, snapshot, target, moment):
 
 def _disclosed_quality(record, snapshot, target, moment):
     """Reuse disclosed operating facts, never stale valuation or total score."""
+    if not factor_screen.financial_dates_valid(record, snapshot, target, moment):
+        return None
     if not isinstance(record, dict) or not isinstance(snapshot, dict):
         return None
     try:
