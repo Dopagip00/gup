@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#112c3a">
+  <meta name="theme-color" content="#f5f7fb">
   <title>沪研 · A 股量化研究台</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png?v=2.8.2">
   <link rel="icon" type="image/svg+xml" sizes="any" href="./favicon.svg?v=2.8.2">
@@ -40,6 +40,7 @@
           <div class="table-footer"><span id="watchlist-summary">最多展示 5 只</span></div>
           <details class="compact-details" id="watchlist-details"><summary>数据与方法 <span id="watchlist-warning-count"></span></summary><p class="source-line" id="research-dates"></p><p class="source-line" id="watchlist-timing"></p><p id="watchlist-dates">正在核对真实时刻</p><div class="alert" id="watchlist-alert" role="status" hidden></div><p id="watchlist-verification">正在核对资料。</p><p>综合技术、财务和已知风险排序；发布后保留原始次序。</p><button class="text-button" id="watchlist-refresh">刷新推荐</button> · <button id="method-btn" class="text-button">完整策略说明 ↗</button></details>
         </article>
+        <div class="market-pulse" aria-label="市场概况"><article class="metric-card"><span class="metric-label">上证指数 · 收盘 <small>000001.SH</small></span><strong class="metric-value" id="index-price">—</strong><span class="metric-foot" id="index-change">等待真实行情</span><span class="metric-decoration" aria-hidden="true">↗</span></article><article class="metric-card"><span class="metric-label">市场趋势判断</span><strong class="metric-value text-value" id="index-trend">等待数据</strong><span class="metric-foot" id="index-trend-note">基于趋势与动量规则</span></article><article class="metric-card"><span class="metric-label">研究覆盖</span><strong class="metric-value" id="coverage">—</strong><span class="metric-foot" id="coverage-note">等待数据同步</span></article></div>
       <details id="global-alert-wrap" class="data-notice" hidden><summary id="global-alert-summary">数据提醒</summary><div id="global-alert" class="alert" role="alert" hidden></div></details>
         <details class="market-research-details" id="market-research-details"><summary>市场数据与模型详情</summary>
         <article class="top-pick" id="top-pick" hidden>
@@ -47,12 +48,7 @@
           <div class="pick-metrics" id="pick-metrics" hidden><div class="pick-return"><span>预计涨幅</span><strong id="pick-return">—</strong><small id="pick-interval">估计区间 —</small></div><div class="pick-entry"><span>观察买入区间</span><strong id="pick-entry">—</strong><small id="pick-validation">验证信息 —</small></div></div>
           <button class="pick-action" id="pick-details" hidden>查看首选研究 <span>↗</span></button><div class="pick-empty-label" id="pick-empty-label">WAIT FOR A VALID SIGNAL</div>
         </article>
-        <div class="metric-grid">
-          <article class="metric-card"><span class="metric-label">上证指数 · 收盘 <small>000001.SH</small></span><strong class="metric-value" id="index-price">—</strong><span class="metric-foot" id="index-change">等待真实行情</span><span class="metric-decoration" aria-hidden="true">↗</span></article>
-          <article class="metric-card"><span class="metric-label">市场趋势判断</span><strong class="metric-value text-value" id="index-trend">等待数据</strong><span class="metric-foot" id="index-trend-note">基于趋势与动量规则</span></article>
-          <article class="metric-card"><span class="metric-label">通过全部验证的买入候选</span><strong class="metric-value" id="opportunity-count">—<small>只</small></strong><span class="metric-foot" id="opportunity-note">独立于上方优选观察榜</span></article>
-          <article class="metric-card"><span class="metric-label">研究覆盖</span><strong class="metric-value" id="coverage">—</strong><span class="metric-foot" id="coverage-note">等待数据同步</span></article>
-        </div>
+        <div class="metric-grid advanced-metrics"><article class="metric-card"><span class="metric-label">通过全部验证的买入候选</span><strong class="metric-value" id="opportunity-count">—<small>只</small></strong><span class="metric-foot" id="opportunity-note">独立于上方优选观察榜</span></article></div>
         <article class="coverage-panel"><div class="coverage-heading"><strong>研究范围与推荐范围</strong><span>指标股纳入全市场研究，单独从推荐范围排除。</span></div><div class="coverage-breakdown" id="coverage-breakdown"><span>等待覆盖明细</span></div></article><div class="market-grid">
           <article class="panel chart-panel"><div class="panel-header"><div><h2>上证指数走势 <span class="pill neutral" id="index-chart-date">收盘数据</span></h2><p>历史价格 · 趋势观察</p></div><div class="segmented" id="index-ranges" aria-label="走势图范围"><button data-range="20">1 个月</button><button data-range="60" class="active">3 个月</button><button data-range="120">6 个月</button></div></div><div class="chart-wrap"><canvas id="index-chart" aria-label="上证指数历史收盘走势"></canvas><div class="chart-empty" id="index-chart-empty">正在连接数据源…</div></div><div class="chart-legend"><span><i class="legend-line"></i>收盘价</span><span><i class="legend-line muted"></i>20 日均线</span><span id="index-chart-caption">历史走势不代表未来表现</span></div></article>
           <article class="panel daily-brief"><div class="panel-header"><div><div class="eyebrow">RESEARCH BRIEF</div><h2>今日研究摘要</h2></div><span class="small-square">↗</span></div><div class="brief-status" id="brief-status">数据准备中</div><ul id="brief-reasons" class="brief-list"><li>数据更新后将生成真实行情研究与每日计划。</li></ul><div class="brief-footer"><span>数据时点</span><strong id="data-date">—</strong><span>下次计划更新</span><strong id="next-run">—</strong></div></article>

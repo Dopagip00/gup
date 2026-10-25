@@ -545,6 +545,7 @@ function renderDailyWatchlist(data,options={}) {
     });
     if(rows.length)text('watchlist-summary',`${rows.length} 只 · ${history?'历史排序':'综合排序'}`);
   }
+  $('daily-watchlist-panel').classList.toggle('is-empty',rows.length===0);
   $('watchlist-empty').hidden=rows.length>0;if(!rows.length)setEmpty('watchlist-empty',emptyTitle,emptyReason);
   const gaps=[],checks=data?.verification||{},withdrawn=list(data?.withdrawn_symbols);
   if(withdrawn.length)gaps.push(`${withdrawn.length}只已撤销，原排序保留`);
