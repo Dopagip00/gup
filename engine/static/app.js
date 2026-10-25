@@ -536,7 +536,7 @@ function renderDailyWatchlist(data,options={}) {
     rows.forEach((item,index)=>{
       const tr=node('tr'),name=node('td'),score=node('td'),risks=node('td','reference-reason');
       const removed=withdrawn.has(item.symbol),components=item.components||{};
-      tr.append(node('td','',`${index+1}${removed?' · 已撤销':''}`));name.append(node('span','stock-name',item.name||item.symbol),node('span','stock-code',symbolLabel(item.symbol)));tr.append(name);
+      const rank=node('td','watch-rank',String(index+1));rank.setAttribute('aria-label',`排名 ${index+1}${removed?'，已撤销':''}`);tr.append(rank);name.append(node('span','stock-name',item.name||item.symbol),node('span','stock-code',symbolLabel(item.symbol)));tr.append(name);
       const qualityOnly=item.verification?.financial_quality_available===true&&item.verification?.financial_complete!==true;
       score.append(node('span','price-primary',typeof item.score==='number'&&Number.isFinite(item.score)&&item.score>=0&&item.score<=100?`${number(item.score,1)} / 100`:'—'),node('span','price-sub',`${removed?'原评分 · ':''}技术 ${numeric(components.technical)?number(components.technical,1):'未提供'} · ${qualityOnly?'财务质量':'财务'} ${numeric(components.financial)?number(components.financial,1):'未核验'}${qualityOnly?' · 估值待核验':''}`));tr.append(score);
       tr.append(node('td','reference-reason',watchFacts(item)));
