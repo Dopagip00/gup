@@ -1,0 +1,15 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-10-26",
+  "signal_date": "2026-10-23",
+  "status": "partial",
+  "started_at": "2026-10-26T08:00:42+08:00",
+  "completed_at": "2026-10-26T08:01:40+08:00",
+  "reviewed_symbols": [],
+  "risk_vetoes": [],
+  "sources": [],
+  "summary": "已实际读取上交所2026年度休市安排，10月26日周一不在年度休市范围，前一完整交易日为10月23日（跨周末，未机械取昨天）。manifest前后读取一致，generated_at=2026-10-25T21:12:48.662435+08:00，data_date=2026-10-23，app_version=2.11.0，schema=1。dashboard.now=2026-10-25T21:11:19.317320+08:00，2318股有效2316失败2，全部stocks遍历eligible=true为0，model_qualified与recommendation_qualified均0，无通过验证的买入建议。今日日期榜与主摘要均date=10月26日、data_date=10月23日、generated_at=2026-10-25T21:11:23.540233+08:00、status=cash，items为空。空榜不表示已完成风险研究。market-brief仍10月25日closed、generated_at=null，不能把周日休市状态当作周一消息已采集；daily-plan也仍10月25日closed。当前未获得今日完整资讯和晨间采集证明，因此partial、不授权新买入。底层型号未核实，记未知；未调用另付费API。",
+  "scope": "README、engine/AGENT_OPERATIONS.md及PROJECT_STATE已通过连接GitHub读取；根及research相关AGENTS返回404。实际读取六个公开接口并重读manifest。未完成三只重点股详情、SSE个股公告分页、央视文章及临时休市公告核验，reviewed_symbols和sources留空；不编造完成数或证据，也不声称历史风险已解除。没有对既有否决作解除结论。当前记录只是本轮已完成数据检查与未完成缺口，不能complete。未读取PDF正文。run_url使用此前服务返回任务聊天URL。只新增今日日期化风险文件，不改算法、工作流、日报、订单或持仓，不备份。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
