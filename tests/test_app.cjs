@@ -32,6 +32,41 @@ test('technical diagnosis is shown as dated facts and never imported into a hist
   assert.equal(a.get('technical-diagnosis').hidden,true);assert.equal(a.get('technical-diagnosis').textContent,'');
 });
 const WATCH_NOW=Date.parse('2026-10-20T09:15:00+08:00');
+test('a weekend cash preparation reveals at nine with its decision reason and no invented server time',()=>{
+  const pages=require('../pages.js'),cal={'2026':{verified:true,holidays:[]}};
+  const cash=watchlist({date:'2026-10-26',data_date:'2026-10-23',signal_date:'2026-10-23',prepared_data_date:'2026-10-23',
+    generated_at:'2026-10-23T21:25:00+08:00',prepared_at:'2026-10-23T21:25:00+08:00',release_at:'2026-10-26T09:00:00+08:00',
+    published_at:null,publication_timing:'prepared',status:'cash',items:[],top_pick:null,eligible:false,actionable:false,message:'弱势市场 · 指数低于MA20与MA60'});
+  const original=structuredClone(cash);
+  for(const [clock,label] of [['2026-10-26T08:59:59+08:00','09:00 揭榜'],['2026-10-26T09:00:00+08:00','预备记录已揭榜']]){
+    const now=Date.parse(clock),value=pages.gateWatchlist(cash,cal,null,new Date(now));
+    value.snapshot_transport={mode:'live',generated_at:'2026-10-23T21:26:00+08:00',data_date:'2026-10-23'};
+    const a=app({now,pages});a.ui.renderDailyWatchlist(value);
+    assert.equal(a.get('recommendation-status').textContent,label);assert.equal(value.published_at,null);
+    assert.equal(a.get('watchlist-body').children.length,0);assert.equal(a.get('watch-priority-metrics').hidden,true);
+    if(clock.includes('09:00')){
+      assert.equal(a.get('watch-priority-name').textContent,'空仓等待');
+      assert.equal(a.get('watch-priority-reason').textContent,cash.message);
+      assert.equal(value.message,cash.message);
+    }
+  }
+  assert.deepEqual(cash,original);
+  const next=pages.gateWatchlist(cash,cal,null,new Date('2026-10-27T09:00:00+08:00'));
+  assert.equal(next.status,'pending');assert.equal(next.top_pick,null);
+});
+test('publication badge shows the actual minute even when the trading-window flag says on time',()=>{
+  const a=app({now:WATCH_NOW}),value=watchlist({published_at:'2026-10-20T09:09:38+08:00'});
+  a.ui.renderDailyWatchlist(value);assert.equal(a.get('recommendation-status').textContent,'09:09 发布');
+  assert.equal(value.publication_timing,'on_time');
+  a.ui.renderDailyWatchlist(watchlist({published_at:'2026-10-20T09:20:00+08:00'}));
+  assert.equal(a.get('recommendation-status').textContent,'推荐待更新');
+});
+test('cash decision keeps the original previous-close basis after today closing data arrives',()=>{
+  const a=app({now:Date.parse('2026-10-20T17:00:00+08:00')});
+  a.ui.state.dashboard={meta:{data_date:'2026-10-20'}};
+  a.ui.renderDailyWatchlist(watchlist({status:'cash',items:[],top_pick:null}));
+  assert.match(a.get('research-dates').textContent,/本日榜单依据：2026-10-19收盘.*最新行情：2026-10-20/);
+});
 test('factor checks show failures and missing data without changing the score or leaking into history',async()=>{
   const a=app(),s=stock({reasons:['已有依据']});
   const factor_screen={symbol:s.symbol,as_of:s.date,groups:[{name:'财务与估值',status:'fail',items:[{label:'年度ROE',status:'fail',value:2,unit:'%',rule:'≥8%'},{label:'PE',status:'unknown',value:null,rule:'0 < PE ≤ 40'}]}],unavailable_dimensions:['实时资金流']};
@@ -254,7 +289,7 @@ test('recommendations lead the page, dates stay small at the right and the empty
   a.ui.state.connected=true;a.ui.state.dashboard={meta:{mode:'manual_research'},stocks:[]};a.ui.renderTopPick([]);a.ui.renderDailyWatchlist(data);
   assert.equal(a.get('watch-priority-label').textContent,'今日首选');assert.equal(a.get('watchlist-title').textContent,'今日推荐');
   assert.equal(a.get('watch-priority-name').textContent,'观察样本 · 600000.SH');assert.equal(a.get('top-pick').hidden,true);
-  assert.equal(a.get('recommendation-status').hidden,true);assert.deepEqual(data,original);assert.equal(a.ui.shortEligible(data.items[0]),false);
+  assert.equal(a.get('recommendation-status').textContent,'09:02 发布');assert.deepEqual(data,original);assert.equal(a.ui.shortEligible(data.items[0]),false);
 });
 test('a concise recommendation keeps concrete risk and offline records while removing repeated certification text',()=>{
   const a=app({now:WATCH_NOW}),data=watchlist();

@@ -411,13 +411,15 @@ function renderObservationDay(data=state.dailyWatchlist) {
   text('recommendation-date',day);
   const published=Date.parse(data?.published_at),release=Date.parse(data?.release_at);
   const matching=data?.date===day,ready=matching&&data.protocol==='daily-observation-v1'&&['watch_only','cash'].includes(data.status)&&(Number.isFinite(published)&&Number.isFinite(release)&&release<=published&&published<=Date.now()||watchClientReveal(data));
-  const status=ready?data.late===true?'迟到更新':historical?'历史记录':'':matching&&data.status==='closed'?'休市':state.historyDate?'记录待更新':'推荐待更新';
+  const time=Number.isFinite(published)?new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(published)):'';
+  const prepared=matching&&data.protocol==='daily-observation-v1'&&data.status==='prepared'&&release===Date.parse(`${day}T09:00:00+08:00`)&&Date.now()<release;
+  const status=ready?`${historical?'历史 · ':''}${watchClientReveal(data)?'预备记录已揭榜':`${time} ${data.late===true?'补发':'发布'}`}`:matching&&data.status==='closed'?'休市':prepared?'09:00 揭榜':state.historyDate?'记录待更新':'推荐待更新';
   text('recommendation-status',status);$('recommendation-status').hidden=!status;
 }
 function renderResearchSource(watch=state.dailyWatchlist) {
   const m=state.dashboard?.meta;if(!m)return;
   const latest=m.data_date||m.report_date,day=state.historyDate||shanghaiDay();
-  const original=watch?.protocol==='daily-observation-v1'&&watch.date===day&&watch.status==='watch_only'
+  const original=watch?.protocol==='daily-observation-v1'&&watch.date===day&&['watch_only','cash'].includes(watch.status)
     && /^\d{4}-\d{2}-\d{2}$/.test(watch.data_date||'')&&watch.data_date<day?watch.data_date:null;
   const source=original&&latest&&original!==latest?`${state.historyDate?'所选':'本日'}榜单依据：${original}收盘 · ${state.historyDate?'行情日期':'最新行情'}：${latest}`:`行情日期：${latest||'尚无数据'}`;
   const snapshotAt=m.snapshot_transport?.generated_at||(typeof m.last_success==='object'?m.last_success?.finished_at:null);

@@ -246,7 +246,8 @@
     data.top_pick=data.items[0]||null;
     if(!data.published_at&&['watch_only','cash'].includes(data.status)){
       data.release_mode='prepublished_client_reveal';data.revealed_at=now.toISOString();
-      data.message='此观察榜已在盘前预先准备，现按客户端北京时间09:00揭榜；published_at仍为空，不冒充服务器准点发布。';
+      // Preserve the actual cash decision reason; reveal provenance has its own fields.
+      if(data.status!=='cash')data.message='此观察榜已在盘前预先准备，现按客户端北京时间09:00揭榜；published_at仍为空，不冒充服务器准点发布。';
     }else if(data.published_at&&(!Number.isFinite(Date.parse(data.published_at))||Date.parse(data.published_at)<release||Date.parse(data.published_at)>now.getTime()+300000))return hide('unavailable','服务器实际发布时间无效，拒绝冒充已发布。');
     if(requested&&requested<today.date)data.historical=true;
     return data;
