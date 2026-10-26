@@ -1,7 +1,7 @@
 'use strict';
 
 const $ = id => document.getElementById(id);
-const state = {dashboard: null, config: null, csrf: '', historyDate: '', range: 60, view: 'overview', limit: 100, selected: null, detailData: null, request: 0, connected: false, quotes: new Map(), topPick: null, longterm: null, dailyWatchlist: null, marketBrief: null, newsDate: ''};
+const state = {dashboard: null, csrf: '', historyDate: '', range: 60, view: 'overview', limit: 100, selected: null, detailData: null, request: 0, connected: false, topPick: null, longterm: null, dailyWatchlist: null, marketBrief: null, newsDate: ''};
 const universeNames = {watchlist: '自选观察池', sse50: '上证 50 成分股', shanghai: '全部沪市 A 股', all: '沪深 A 股'};
 const statusNames = {idle:'等待计划更新', running:'正在更新', success:'更新完成', partial:'部分数据异常', error:'更新失败', pending:'待成交', filled:'已成交', expired:'已失效', cancelled:'已撤销'};
 const numeric = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
@@ -57,6 +57,20 @@ function switchView(view) {
   if(view==='reports') loadReports();
   if(view==='settings') {loadConfig();loadSystem();}
   if(view==='overview') requestAnimationFrame(drawIndex);
+}
+
+function selectResearchDate(date) {
+  state.historyDate=date;
+  $('history-date').value=date;
+  state.limit=100;
+  renderObservationDay();
+  return Promise.allSettled([loadDashboard(),loadDailyWatchlist()]);
+}
+
+function refreshVisibleView() {
+  if(document.hidden)return;
+  const refresh={overview:loadDailyWatchlist,reports:loadReports,longterm:loadLongterm,news:loadNews}[state.view];
+  return Promise.allSettled([loadDashboard(),loadQuotes(),refresh?.()]);
 }
 
 async function loadDashboard() {
@@ -292,9 +306,9 @@ function renderDetail() {
   if(/^sh\d{6}$/.test(s.symbol))for(const [label,url] of [['腾讯行情',`https://gu.qq.com/${s.symbol}/gp`],['东方财富行情',`https://quote.eastmoney.com/${s.symbol}.html`],['上交所公司公告',`https://www.sse.com.cn/assortment/stock/list/info/announcement/index.shtml?productId=${s.symbol.slice(2)}`]]){const a=node('a','text-button',label+' ↗');a.href=url;a.target='_blank';a.rel='noopener noreferrer';sources.append(a);}
 }
 
-async function loadConfig(){try{const cfg=await api('/api/config');state.config=cfg;state.csrf=cfg.csrf_token||state.csrf;$('setting-universe').value=cfg.universe||'shanghai';$('setting-watchlist').value=Array.isArray(cfg.watchlist)?cfg.watchlist.join(', '):cfg.watchlist||'';$('setting-refresh').value=cfg.refresh_minutes||5;if(cfg.hosted){$('settings-form').querySelectorAll('input,select,button').forEach(n=>n.disabled=true);text('settings-status','云端固定研究全部沪市A股；交易日08:00收集、09:00发布。策略修改请在同一项目中发布更新。');}}catch(e){text('settings-status',e.message);$('settings-status').classList.add('error');}}
+async function loadConfig(){try{const cfg=await api('/api/config');state.csrf=cfg.csrf_token||state.csrf;$('setting-universe').value=cfg.universe||'shanghai';$('setting-watchlist').value=Array.isArray(cfg.watchlist)?cfg.watchlist.join(', '):cfg.watchlist||'';$('setting-refresh').value=cfg.refresh_minutes||5;if(cfg.hosted){$('settings-form').querySelectorAll('input,select,button').forEach(n=>n.disabled=true);text('settings-status','云端固定研究全部沪市A股；交易日08:00收集、09:00发布。策略修改请在同一项目中发布更新。');}}catch(e){text('settings-status',e.message);$('settings-status').classList.add('error');}}
 
-async function loadReports(){try{const result=await api('/api/reports'),reports=Array.isArray(result)?result:list(result.reports);const container=clear($('reports-list'));reports.forEach(r=>{const date=typeof r==='string'?r:r.date||r.report_date;const row=node('div','report-row');row.append(node('span','report-date',date),node('span','report-description',numeric(r.count)?`${r.count} 只股票的研究快照`:'每日研究快照'));const button=node('button','button light small','查看研究 ↗');button.addEventListener('click',()=>{state.historyDate=date;$('history-date').value=date;state.limit=100;switchView('overview');renderObservationDay();loadDashboard();loadDailyWatchlist();});row.append(button);const download=node('a','text-button','CSV ↓');download.href=`/api/export.csv?date=${encodeURIComponent(date)}`;row.append(download);container.append(row);});$('reports-empty').hidden=reports.length>0;}catch(e){setEmpty('reports-empty','无法加载历史报告',e.message);}loadForecastAudit();}
+async function loadReports(){try{const result=await api('/api/reports'),reports=Array.isArray(result)?result:list(result.reports);const container=clear($('reports-list'));reports.forEach(r=>{const date=typeof r==='string'?r:r.date||r.report_date;const row=node('div','report-row');row.append(node('span','report-date',date),node('span','report-description',numeric(r.count)?`${r.count} 只股票的研究快照`:'每日研究快照'));const button=node('button','button light small','查看研究 ↗');button.addEventListener('click',()=>{switchView('overview');selectResearchDate(date);});row.append(button);const download=node('a','text-button','CSV ↓');download.href=`/api/export.csv?date=${encodeURIComponent(date)}`;row.append(download);container.append(row);});$('reports-empty').hidden=reports.length>0;}catch(e){setEmpty('reports-empty','无法加载历史报告',e.message);}loadForecastAudit();}
 async function loadForecastAudit(){
   let panel=$('forecast-audit-panel');if(!panel){panel=node('article','panel run-panel');panel.id='forecast-audit-panel';$('view-reports').append(panel);}
   try{const audit=await api('/api/forecast-audit');clear(panel).append(node('h2','','事前预测跟踪'),node('p','fine-print',audit.selection||'只跟踪实际事前记录；不回填历史成绩。'));
@@ -308,7 +322,7 @@ async function loadForecastAudit(){
 }
 function renderRuns(runs){const root=clear($('runs-list'));list(runs).slice(0,12).forEach(r=>{const row=node('div','run-row');row.append(node('strong','',shortTime(r.started_at||r.date)),node('span',`pill ${r.status==='success'?'positive':r.status==='error'?'negative':'neutral'}`,statusNames[r.status]||r.status||'—'),node('span','',`${r.target_date||''} · 成功 ${r.ok||0} / ${r.total||0}${r.failed?` · 失败 ${r.failed}`:''}${r.error?` · ${r.error}`:''}`));root.append(row);});if(!runs.length)root.append(node('div','fine-print','暂无运行记录。'));}
 
-async function loadQuotes(){try{const data=await api('/api/quotes');state.quotes=new Map(list(data.quotes).map(q=>[q.symbol,q]));const ix=state.quotes.get('sh000001');const current=ix?`沪指 ${number(ix.price)} (${percentage(ix.change_pct,true)}) · 报价时间 ${shortTime(ix.datetime||ix.timestamp)}`:'暂无可用盘中报价';text('quote-status',`延时报价　${current}　｜　${data.status || '研究评分基于完整日线'}${data.fetched_at?` · 最近获取 ${shortTime(data.fetched_at)}`:''}`);}catch{ text('quote-status','延时报价暂不可用。研究评分基于完整日线；请勿把缓存行情当作实时成交价格。');}}
+async function loadQuotes(){try{const data=await api('/api/quotes');const ix=list(data.quotes).find(q=>q.symbol==='sh000001');const current=ix?`沪指 ${number(ix.price)} (${percentage(ix.change_pct,true)}) · 报价时间 ${shortTime(ix.datetime||ix.timestamp)}`:'暂无可用盘中报价';text('quote-status',`延时报价　${current}　｜　${data.status || '研究评分基于完整日线'}${data.fetched_at?` · 最近获取 ${shortTime(data.fetched_at)}`:''}`);}catch{ text('quote-status','延时报价暂不可用。研究评分基于完整日线；请勿把缓存行情当作实时成交价格。');}}
 
 function renderTopPick(stocks) {
   const meta=state.dashboard?.meta||{},coverage=meta.coverage || {};
@@ -717,8 +731,8 @@ document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',(
 window.addEventListener('hashchange',()=>switchView(location.hash.slice(1)));
 $('method-btn').addEventListener('click',()=>switchView('settings'));
 $('refresh-btn').addEventListener('click',async()=>{$('refresh-btn').disabled=true;try{const result=await api('/api/refresh',{method:'POST',body:'{}'});message(result.message||(result.status==='running'?'研究任务已在运行':'已开始更新真实行情和研究排名'));await Promise.allSettled([loadDashboard(),loadDailyWatchlist()]);}catch(e){message(e.message,true);$('refresh-btn').disabled=false;}});
-$('history-date').addEventListener('change',()=>{state.historyDate=$('history-date').value;state.limit=100;renderObservationDay();loadDashboard();loadDailyWatchlist();});
-$('today-btn').addEventListener('click',()=>{state.historyDate='';state.limit=100;renderObservationDay();loadDashboard();loadDailyWatchlist();});
+$('history-date').addEventListener('change',()=>selectResearchDate($('history-date').value));
+$('today-btn').addEventListener('click',()=>selectResearchDate(''));
 ['stock-search','min-score','show-unqualified','show-excluded','stock-sort'].forEach(id=>$(id).addEventListener(id==='stock-search'?'input':'change',()=>{state.limit=100;renderStocks();}));
 $('show-more').addEventListener('click',()=>{state.limit+=100;renderStocks();});
 document.querySelectorAll('[data-range]').forEach(button=>button.addEventListener('click',()=>{state.range=Number(button.dataset.range);document.querySelectorAll('[data-range]').forEach(b=>b.classList.toggle('active',b===button));drawIndex();}));
@@ -740,5 +754,5 @@ clock();setInterval(clock,30000);
 switchView(location.hash.slice(1)||'overview');
 renderObservationDay();
 Promise.allSettled([loadDashboard(),loadDailyWatchlist(),loadConfig(),loadQuotes()]);
-setInterval(()=>{if(!document.hidden){loadDashboard();loadQuotes();if(state.view==='overview'){loadDailyWatchlist();}if(state.view==='reports')loadReports();if(state.view==='longterm')loadLongterm();if(state.view==='news')loadNews();}},30000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){loadDashboard();loadQuotes();if(state.view==='overview'){loadDailyWatchlist();}if(state.view==='news')loadNews();}});
+setInterval(refreshVisibleView,30000);
+document.addEventListener('visibilitychange',refreshVisibleView);
