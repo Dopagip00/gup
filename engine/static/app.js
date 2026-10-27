@@ -117,7 +117,7 @@ function renderDashboard(data) {
   text('market-status',offline?'离线研究缓存':running?'研究更新中':publicSnapshot()?'公开快照已连接':m.is_trading?'交易时段':'休市 / 非交易时段');
   $('market-status').classList.toggle('live',!offline&&(!!m.is_trading || running));
   $('refresh-btn').disabled=running;
-  text('refresh-btn',running?`同步中 ${status.completed || 0}/${status.total || '—'}`:publicSnapshot()?offline?'↻ 重试读取快照':'↻ 重新读取快照':'↻ 更新研究');
+  text('refresh-btn',running?`同步中 ${status.completed || 0}/${status.total || '—'}`:publicSnapshot()?offline?'↻ 重试读取快照':'↻ 刷新':'↻ 更新研究');
   const warnings=list(m.warnings).map(String);
   if(offline)warnings.unshift(`${m.snapshot_transport.message||'正在查看离线研究缓存，新买入资格已取消。'} 快照生成：${shortTime(m.snapshot_transport.generated_at)}；点击上方重试。`);
   const missingReport=m.report_selection?.status==='unavailable';
@@ -571,9 +571,12 @@ function renderDailyWatchlist(data,options={}) {
   if(missingFinance)gaps.push(`${missingFinance}只财务待补充`);
   if(qualityOnly)gaps.push(`${qualityOnly}只估值待补充`);
   $('watchlist-gap').hidden=!data||!gaps.length;text('watchlist-gap',gaps.join(' · '));
-  text('watchlist-warning-count',warnings.length?`· ${new Set(warnings).size}项记录`:'');
+  $('watchlist-warning-count').textContent=warnings.length?`· ${new Set(warnings).size}项记录`:'';
   $('watchlist-alert').hidden=!warnings.length; text('watchlist-alert',[...new Set(warnings)].join('\n'));
   applyWaveMarket();
+  const cashDecision=emptyTitle==='空仓等待'&&rows.length===0;
+  $('daily-watchlist-panel').classList.toggle('has-cash-decision',cashDecision);
+  if(cashDecision)text('watch-priority-reason',emptyReason.replace(/^空仓等待[：:]\s*/,''));
 }
 async function loadDailyWatchlist() {
   const date=state.historyDate,request=state.watchlistRequest=(state.watchlistRequest||0)+1;
