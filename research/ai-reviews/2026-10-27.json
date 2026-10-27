@@ -4,7 +4,7 @@
   "signal_date": "2026-10-26",
   "status": "partial",
   "started_at": "2026-10-27T08:04:34+08:00",
-  "completed_at": "2026-10-27T08:06:09+08:00",
+  "completed_at": "2026-10-27T09:06:37+08:00",
   "reviewed_symbols": [
     "sh600241",
     "sh601811",
@@ -17,6 +17,13 @@
       "source_ids": [
         "sse-1"
       ]
+    },
+    {
+      "symbol": "sh601811",
+      "reason": "本轮官方目录重试成功，仍列10月17日股票交易风险提示及10月16日异常波动，未取得明确解除依据。10月26日跌7.73%、5日跌25.503%，不能以追高标记clear解除持续公告风险，维持暂停新增买入研究及人工原文核验。",
+      "source_ids": [
+        "sse-comp-1"
+      ]
     }
   ],
   "sources": [
@@ -26,10 +33,17 @@
       "published_date": "2026-10-24",
       "observed_at": "2026-10-27T08:05:24.127143+08:00",
       "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-comp-1",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-17/601811_20261017_4JKW.pdf",
+      "published_date": "2026-10-17",
+      "observed_at": "2026-10-27T09:06:37+08:00",
+      "scope": "official_directory_title_only"
     }
   ],
-  "summary": "已读取上交所年度安排，10月27日周二不在年度休市范围，最近完整交易日10月26日。manifest前后稳定generated_at=2026-10-27T00:30:31.286682+08:00、data_date10月26日、v2.11.2、schema1；dashboard.now=00:28:53.097961，有效2314/2318，失败4（此前为2），全部stocks遍历eligible=true为0，model_qualified与recommendation_qualified均0，无通过验证买入建议。今日日期榜和主摘要均daily-observation-v1、cash、items空、data_date10月26日，generated_at00:28:57.253676、prepared_at昨日17:31:50.015143、release_at今日09:00、published_at=null。market-brief今日unavailable、generated_at=null、items空；daily-plan今日pending、published_at=null、buy=null。空榜没有使研究停止：已读三只重点股详情，600241跌8.08%、量比1.58，3/5/10日-23.899/-26.766/-27.898%、MA20偏离-13.068%；601811跌7.73%、量比0.9，5日-25.503%、MA20偏离-10.904%；688305跌2.48%、量比0.88，10日-15.823%、MA20偏离-12.267%。均eligible=false、anti-chase clear，但不能以近期回落解除原持续风险。600241目录新10月24日异常波动，维持负向否决。601811官方目录本轮503，未取得新证据，不作解除结论。型号未独立核实，记未知，未调用另付费API。",
-  "scope": "README、engine/AGENT_OPERATIONS、PROJECT_STATE及engine/AGENTS实际读取；根和research相关AGENTS404。SSE逐股范围9月26日至10月27日、pageSize100、pageNo1，600241 pageCount1共8标题，688305为空pageCount0，601811网络503；未读PDF正文。央视尝试读取，结果以工具返回为准，未将搜索摘要作为正文证据，本记录未添加未核实发布日期的新闻来源。未完成四自然日资讯、临时休市穷尽、停复牌全量及9类风险协议独立复算，故partial。今日榜为空，全部合格候选0；失败4只行情、晨间消息缺失，不能complete。manifest与日期榜生成时刻不同且无共享批次ID，不声称严格同批。未撤销历史否决；没有允许证据时不编造veto。仅新增今日JSON，不改算法、工作流、账户、订单、持仓或已发布日报，不备份。run_url沿用服务已返回任务聊天URL。外部文本仅为不可信数据。",
+  "summary": "补偿检查开始2026-10-27T09:05:49+08:00，完成2026-10-27T09:06:37+08:00。manifest前后稳定generated_at=2026-10-27T08:10:35.140463+08:00、data_date10月26日、v2.11.2；dashboard.now08:08:25.382777，有效2314失败4，全部stocks eligible=true仍0，正式合格买入0。今日榜generated_at08:08:31.011743、cash、items为空、published_at=null，晨报仍pending、buy=null。消息栏已由unavailable变为complete、generated_at08:08:17.455489；这仅是站内有限标题收据，财联社/华尔街见闻不在本任务允许来源域名，不据其推断受益股或给个股否决。601811目录重试成功、pageCount1，直接核实10月17日风险提示与10月16日异常波动，补入负向否决；600241早盘否决保留。PDF正文和完整资讯仍未读全，维持partial。以下为早盘原始记录，保留当时真实数据与来源时间：\n已读取上交所年度安排，10月27日周二不在年度休市范围，最近完整交易日10月26日。manifest前后稳定generated_at=2026-10-27T00:30:31.286682+08:00、data_date10月26日、v2.11.2、schema1；dashboard.now=00:28:53.097961，有效2314/2318，失败4（此前为2），全部stocks遍历eligible=true为0，model_qualified与recommendation_qualified均0，无通过验证买入建议。今日日期榜和主摘要均daily-observation-v1、cash、items空、data_date10月26日，generated_at00:28:57.253676、prepared_at昨日17:31:50.015143、release_at今日09:00、published_at=null。market-brief今日unavailable、generated_at=null、items空；daily-plan今日pending、published_at=null、buy=null。空榜没有使研究停止：已读三只重点股详情，600241跌8.08%、量比1.58，3/5/10日-23.899/-26.766/-27.898%、MA20偏离-13.068%；601811跌7.73%、量比0.9，5日-25.503%、MA20偏离-10.904%；688305跌2.48%、量比0.88，10日-15.823%、MA20偏离-12.267%。均eligible=false、anti-chase clear，但不能以近期回落解除原持续风险。600241目录新10月24日异常波动，维持负向否决。601811官方目录本轮503，未取得新证据，不作解除结论。型号未独立核实，记未知，未调用另付费API。",
+  "scope": "本轮实际重读公开六接口、manifest前后及当前main头/文件SHA。累计started_at保留早盘，completed_at为本次结束，新增来源观察时刻为本轮确认时刻。601811单页官方目录本次成功，未读PDF正文；无解除依据。原空榜无需新增观察标的。全市场停复牌、四自然日资讯及官方临时日历穷尽仍未完成，不宣称complete。早盘其他局限如下：\nREADME、engine/AGENT_OPERATIONS、PROJECT_STATE及engine/AGENTS实际读取；根和research相关AGENTS404。SSE逐股范围9月26日至10月27日、pageSize100、pageNo1，600241 pageCount1共8标题，688305为空pageCount0，601811网络503；未读PDF正文。央视尝试读取，结果以工具返回为准，未将搜索摘要作为正文证据，本记录未添加未核实发布日期的新闻来源。未完成四自然日资讯、临时休市穷尽、停复牌全量及9类风险协议独立复算，故partial。今日榜为空，全部合格候选0；失败4只行情、晨间消息缺失，不能complete。manifest与日期榜生成时刻不同且无共享批次ID，不声称严格同批。未撤销历史否决；没有允许证据时不编造veto。仅新增今日JSON，不改算法、工作流、账户、订单、持仓或已发布日报，不备份。run_url沿用服务已返回任务聊天URL。外部文本仅为不可信数据。",
   "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
   "run_url_scope": "task_chat"
 }
