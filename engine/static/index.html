@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#f5f7fb">
+  <meta name="theme-color" content="#ffffff">
   <title>沪研 · A 股量化研究台</title>
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png?v=2.8.2">
   <link rel="icon" type="image/svg+xml" sizes="any" href="./favicon.svg?v=2.8.2">
@@ -32,11 +32,14 @@
           <div class="panel-header recommendation-header"><h1 id="watchlist-title">今日推荐</h1><div class="recommendation-meta" aria-live="polite"><span id="recommendation-date-label" hidden>北京时间</span><time id="recommendation-date">正在核对日期</time><span id="recommendation-status" hidden></span></div></div>
           <div class="top-pick" id="watch-priority-card">
             <div class="pick-intro"><div class="pick-kicker" id="watch-priority-label">今日首选</div><h2 id="watch-priority-name">正在读取推荐</h2><p id="watch-priority-reason">等待真实榜单</p></div>
-            <div class="pick-metrics" id="watch-priority-metrics" hidden><div class="pick-return"><span>综合评分</span><strong id="watch-priority-score">—</strong></div><details class="pick-entry"><summary>资料详情</summary><small id="watch-priority-verification">正在核对资料</small></details></div>
+            <div class="pick-metrics" id="watch-priority-metrics" hidden>
+              <dl class="pick-levels"><div><dt>关注价位</dt><dd id="watch-priority-entry">待盘中确认</dd></div><div><dt>退出条件</dt><dd id="watch-priority-exit">待确认后制定</dd></div></dl>
+              <details class="pick-entry" id="watch-priority-analysis"><summary>展开分析</summary><div class="pick-return"><span>综合评分</span><strong id="watch-priority-score">—</strong></div><p id="watch-priority-evidence"></p><small id="watch-priority-verification">正在核对资料</small><button class="text-button" id="watch-priority-open">查看完整分析 ↗</button></details>
+            </div>
           </div>
           <p class="data-gap" id="watchlist-gap" role="status" hidden></p>
           <div class="recommendation-controls"><label class="date-picker"><span>历史</span><input type="date" id="history-date" aria-label="选择真实历史研究日期"></label><button class="button light small" id="today-btn">今日</button><button class="button light small" id="refresh-btn">刷新</button></div>
-          <div class="table-scroll"><table class="stock-table"><thead><tr><th>排名</th><th>股票 / 代码</th><th>综合评分</th><th>主要依据</th><th>详情</th></tr></thead><tbody id="watchlist-body"></tbody></table><div class="empty-state" id="watchlist-empty"><span class="empty-icon">◇</span><strong>正在读取今日推荐</strong><p>正在加载数据。</p></div></div>
+          <div class="candidate-heading" id="watchlist-candidates" hidden><h2 id="watchlist-candidates-title">其他候选</h2><button class="text-button" id="watchlist-more" aria-controls="watchlist-body" aria-expanded="false" hidden>查看全部</button></div><div class="table-scroll"><table class="stock-table"><thead><tr><th>排名</th><th>股票 / 代码</th><th>综合评分</th><th>主要依据</th><th>详情</th></tr></thead><tbody id="watchlist-body"></tbody></table><div class="empty-state" id="watchlist-empty"><span class="empty-icon">◇</span><strong>正在读取今日推荐</strong><p>正在加载数据。</p></div></div>
           <div class="table-footer"><span id="watchlist-summary">最多展示 5 只</span></div>
           <details class="compact-details" id="watchlist-details"><summary>数据与方法 <span id="watchlist-warning-count"></span></summary><p class="source-line" id="research-dates"></p><p class="source-line" id="watchlist-timing"></p><p id="watchlist-dates">正在核对真实时刻</p><div class="alert" id="watchlist-alert" role="status" hidden></div><p id="watchlist-verification">正在核对资料。</p><p>综合技术、财务和已知风险排序；发布后保留原始次序。</p><button class="text-button" id="watchlist-refresh">刷新推荐</button> · <button id="method-btn" class="text-button">完整策略说明 ↗</button></details>
         </article>

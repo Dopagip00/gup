@@ -95,6 +95,24 @@ function watchlist(overrides={}){
   const first={symbol:'sh600000',name:'观察样本',asof:'2026-10-19',score:73.5,components:{technical:80,financial:63.75},reasons:['量价规则相对靠前','财务字段已取得'],risk_notes:['模型未通过正式买入验证','公告与AI未完整核验'],verification:{announcements_status:'unverified',session_status:'unverified',ai_status:'unverified'},eligible:false,actionable:false,entry_low:9876.54,entry_high:9999.99,stop_loss:8765.43,take_profit:12345.67};
   return {protocol:'daily-observation-v1',date:'2026-10-20',data_date:'2026-10-19',signal_date:'2026-10-19',generated_at:'2026-10-20T08:55:00+08:00',release_at:'2026-10-20T09:00:00+08:00',published_at:'2026-10-20T09:02:00+08:00',publication_timing:'on_time',late:false,status:'watch_only',model_validated:false,items:[first],top_pick:first,verification:first.verification,warnings:[],...overrides};
 }
+test('compact candidates keep the original cohort and reveal all without promoting a withdrawn first',()=>{
+  const a=app({now:WATCH_NOW}),data=watchlist();
+  data.items=Array.from({length:5},(_,i)=>({...data.items[0],symbol:`sh60000${i}`,name:`原始第${i+1}名`}));
+  data.top_pick=data.items[0];a.ui.state.dailyWatchlist=data;
+  const original=JSON.stringify(data),visible=()=>a.get('watchlist-body').children.filter(r=>!r.hidden);
+  a.ui.renderDailyWatchlist(data);
+  assert.equal(visible().length,3);assert.equal(visible()[0].children[0].textContent,'2');
+  assert.equal(a.get('watchlist-body').children.length,5);
+  a.get('watchlist-more').onclick();assert.equal(visible().length,4);
+  a.get('watchlist-more').onclick();assert.equal(visible().length,3);
+  assert.equal(JSON.stringify(data),original);
+  data.withdrawn_symbols=[data.items[0].symbol];a.ui.renderDailyWatchlist(data);
+  assert.match(a.get('watch-priority-name').textContent,/已撤销/);
+  assert.equal(visible()[0].children[0].textContent,'1');assert.match(visible()[0].textContent,/已撤销/);
+  a.get('watchlist-more').onclick();assert.equal(visible().length,5);
+  a.ui.state.historyDate='2026-10-19';a.ui.renderDailyWatchlist(data);
+  assert.equal(visible().length,0);assert.equal(a.get('watchlist-candidates').hidden,true);
+});
 test('an unqualified observation can be visible without becoming a formal buy or showing any supplied trade price',()=>{
   const a=app({now:WATCH_NOW}),data=watchlist();a.ui.state.connected=true;a.ui.state.dashboard={meta:{mode:'manual_research'},stocks:[]};a.ui.renderTopPick([]);a.ui.renderDailyWatchlist(data);
   assert.equal(a.get('watchlist-body').children.length,1);assert.equal(a.get('watch-priority-name').textContent,'观察样本 · 600000.SH');assert.equal(a.get('watch-priority-score').textContent,'73.5 / 100');
@@ -166,8 +184,8 @@ test('a forged client reveal marker cannot bypass genuine preparation and snapsh
 });
 test('old and selected historical observations never acquire today labels or substitute another day',()=>{
   const data=watchlist({date:'2026-10-19',data_date:'2026-10-16',signal_date:'2026-10-16',generated_at:'2026-10-19T08:55:00+08:00',release_at:'2026-10-19T09:00:00+08:00',published_at:'2026-10-19T09:02:00+08:00'});
-  const latest=app({now:WATCH_NOW});latest.ui.renderDailyWatchlist(data);assert.match(latest.get('watchlist-title').textContent,/2026-10-19.*历史记录/);assert.match(latest.get('watchlist-alert').textContent,/尚未取得 2026-10-20/);assert.doesNotMatch(latest.get('watch-priority-label').textContent,/今日/);
-  const selected=app({now:WATCH_NOW});selected.ui.state.historyDate='2026-10-19';selected.ui.renderDailyWatchlist(data);assert.equal(selected.get('watchlist-body').children.length,1);assert.match(selected.get('watchlist-title').textContent,/历史记录/);assert.match(selected.get('watchlist-dates').textContent,/截至前收盘：2026-10-16/);
+  const latest=app({now:WATCH_NOW});latest.ui.renderDailyWatchlist(data);assert.match(latest.get('watchlist-title').textContent,/历史推荐/);assert.match(latest.get('watchlist-alert').textContent,/尚未取得 2026-10-20/);assert.doesNotMatch(latest.get('watch-priority-label').textContent,/今日/);
+  const selected=app({now:WATCH_NOW});selected.ui.state.historyDate='2026-10-19';selected.ui.renderDailyWatchlist(data);assert.equal(selected.get('watchlist-body').children.length,1);assert.match(selected.get('watchlist-title').textContent,/历史推荐/);assert.match(selected.get('watchlist-dates').textContent,/截至前收盘：2026-10-16/);
   selected.ui.renderDailyWatchlist(watchlist());assert.equal(selected.get('watchlist-body').children.length,0);assert.match(selected.get('watchlist-empty').textContent,/请求 2026-10-19，取得记录属于 2026-10-20/);assert.equal(selected.get('watch-priority-metrics').hidden,true);
 });
 test('withdrawing the immutable original first observation never promotes a runner-up',()=>{
@@ -208,7 +226,7 @@ test('late latest-watchlist responses cannot overwrite a newer selected historic
   const a=app({now:WATCH_NOW}),pending=[],paths=[];a.ui.setApi(path=>{paths.push(path);return new Promise(resolve=>pending.push(resolve));});
   const first=a.ui.loadDailyWatchlist();a.ui.state.historyDate='2026-10-19';const second=a.ui.loadDailyWatchlist();const historical=watchlist({date:'2026-10-19',data_date:'2026-10-16',release_at:'2026-10-19T09:00:00+08:00',published_at:'2026-10-19T09:02:00+08:00'});
   pending[1](historical);await second;pending[0](watchlist());await first;
-  assert.deepEqual(paths,['/api/daily-watchlist','/api/daily-watchlist?date=2026-10-19']);assert.equal(a.ui.state.dailyWatchlist.date,'2026-10-19');assert.match(a.get('watchlist-title').textContent,/2026-10-19.*历史记录/);
+  assert.deepEqual(paths,['/api/daily-watchlist','/api/daily-watchlist?date=2026-10-19']);assert.equal(a.ui.state.dailyWatchlist.date,'2026-10-19');assert.match(a.get('watchlist-title').textContent,/历史推荐/);
 });
 test('today recommendation retains its small assigned date while source dates remain truthful',()=>{
   const now=Date.parse('2026-10-21T14:30:00+08:00'),a=app({now});

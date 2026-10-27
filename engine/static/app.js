@@ -489,19 +489,34 @@ function applyWaveMarket() {
   text('watch-priority-reason',`${w.regime==='weak'?'弱势':'震荡'}市场 · 暂停新增候选`);
   $('watch-priority-metrics').hidden=true;
   if(state.dailyWatchlist?.items?.length)text('watchlist-summary',`${state.dailyWatchlist.items.length} 只 · 今日原始榜单`);
+  updateWatchlistPresentation();
+}
+function updateWatchlistPresentation() {
+  const rows=Array.from($('watchlist-body').children),hasPick=!$('watch-priority-metrics').hidden;
+  const key=state.historyDate||state.dailyWatchlist?.date||shanghaiDay(),expanded=state.watchlistExpanded===key;
+  const candidates=rows.length-(hasPick?1:0);
+  rows.forEach((row,index)=>{row.hidden=hasPick&&index===0||!expanded&&index>=(hasPick?4:3);});
+  $('watchlist-candidates').hidden=candidates<=0;
+  text('watchlist-candidates-title',hasPick?'其他候选':'原始榜单');
+  const more=$('watchlist-more');more.hidden=candidates<=3;more.setAttribute('aria-expanded',String(expanded));
+  more.textContent=expanded?'收起':`查看全部 ${candidates} 支`;
+  more.onclick=()=>{state.watchlistExpanded=expanded?null:key;updateWatchlistPresentation();};
 }
 function renderDailyWatchlist(data,options={}) {
   renderObservationDay(data);
   renderResearchSource(data);
   const body=clear($('watchlist-body')),today=shanghaiDay(),selected=state.historyDate;
   const recordDate=typeof data?.date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(data.date)?data.date:null;
-  const history=!!selected||!!recordDate&&recordDate<today,day=selected||recordDate||today;
-  text('watchlist-title',history?`${day} 推荐 · 历史记录`:recordDate&&recordDate>today?`${recordDate} 推荐 · 待发布`:'今日推荐');
+  const history=!!selected||!!recordDate&&recordDate<today;
+  text('watchlist-title',history?'历史推荐':recordDate&&recordDate>today?'待发布推荐':'今日推荐');
   text('watch-priority-label',history?'当日首选 · 历史记录':recordDate&&recordDate>today?'首选 · 待发布':'今日首选');
   text('watch-priority-name',options.loading?'正在读取推荐':'暂无首选');
   text('watch-priority-reason','正在核对当日数据。');
   $('watch-priority-metrics').hidden=true;
   text('watch-priority-score','—');text('watch-priority-verification','公告与 AI 完整性待核验');
+  text('watch-priority-entry',history?'当时未设定':'待盘中确认');text('watch-priority-exit',history?'当时未设定':'待确认后制定');
+  text('watch-priority-evidence','');$('watch-priority-open').onclick=null;
+  $('watch-priority-analysis').open=false;
   text('watchlist-summary','');
   const verification=watchVerification(data?.verification);text('watchlist-verification',verification);
   const warnings=conciseWatchNotes(data?.warnings),clientReveal=watchClientReveal(data);
@@ -542,12 +557,15 @@ function renderDailyWatchlist(data,options={}) {
     for(const alert of list(data.alerts))warnings.unshift(`${alert?.symbol?symbolLabel(alert.symbol)+'：':''}${watchText(alert)}`);
     const first=rows[0],top=data.top_pick&&first?.symbol===data.top_pick.symbol?first:null;
     if(top&&!withdrawn.has(top.symbol)){
-      text('watch-priority-name',`${top.name||top.symbol} · ${symbolLabel(top.symbol)}`);
+      text('watch-priority-name',top.name||top.symbol);
+      $('watch-priority-name').append(node('span','pick-symbol',` · ${symbolLabel(top.symbol)}`));
       text('watch-priority-reason',watchFacts(top));
+      text('watch-priority-evidence',[...list(top.reasons).map(watchText),...conciseWatchNotes(top.risk_notes)].join('；'));
+      $('watch-priority-open').onclick=()=>openStock(top);
       text('watch-priority-score',typeof top.score==='number'&&Number.isFinite(top.score)&&top.score>=0&&top.score<=100?`${number(top.score,1)} / 100`:'—');
       text('watch-priority-verification',watchVerification(top.verification||data.verification));$('watch-priority-metrics').hidden=false;
     }else if(top&&withdrawn.has(top.symbol)){
-      text('watch-priority-name','今日首选已撤销');text('watch-priority-reason',`${top.name||top.symbol}（${symbolLabel(top.symbol)}）出现风险，暂停推荐。`);
+      text('watch-priority-name',history?'当日首选已撤销':'今日首选已撤销');text('watch-priority-reason',`${top.name||top.symbol}（${symbolLabel(top.symbol)}）出现风险，暂停推荐。`);
     }
     rows.forEach((item,index)=>{
       const tr=node('tr'),name=node('td'),score=node('td'),risks=node('td','reference-reason');
@@ -557,7 +575,7 @@ function renderDailyWatchlist(data,options={}) {
       score.append(node('span','price-primary',typeof item.score==='number'&&Number.isFinite(item.score)&&item.score>=0&&item.score<=100?`${number(item.score,1)} / 100`:'—'),node('span','price-sub',`${removed?'原评分 · ':''}技术 ${numeric(components.technical)?number(components.technical,1):'未提供'} · ${qualityOnly?'财务质量':'财务'} ${numeric(components.financial)?number(components.financial,1):'未核验'}${qualityOnly?' · 估值待核验':''}`));tr.append(score);
       tr.append(node('td','reference-reason',watchFacts(item)));
       if(removed)risks.append(node('span','pill warn','已撤销'));
-      const riskDetails=node('details','risk-details');riskDetails.append(node('summary','','分析详情'),node('p','',list(item.reasons).map(watchText).join('；')||'暂无详细依据。'),node('p','',conciseWatchNotes(item.risk_notes).join('；')||'暂无新增风险记录。'));risks.append(riskDetails);const waveButton=node('button','button light small','主升浪分析');waveButton.addEventListener('click',()=>openStock(item));risks.append(waveButton);tr.append(risks);body.append(tr);
+      const riskDetails=node('details','risk-details');riskDetails.append(node('summary','','分析详情'),node('p','',list(item.reasons).map(watchText).join('；')||'暂无详细依据。'),node('p','',conciseWatchNotes(item.risk_notes).join('；')||'暂无新增风险记录。'));riskDetails.append(node('p','',score.textContent));risks.append(riskDetails);const waveButton=node('button','text-button','完整分析 ↗');waveButton.addEventListener('click',()=>openStock(item));riskDetails.append(waveButton);tr.append(risks);body.append(tr);
     });
     if(rows.length)text('watchlist-summary',`${rows.length} 只 · ${history?'历史排序':'综合排序'}`);
   }
@@ -577,6 +595,7 @@ function renderDailyWatchlist(data,options={}) {
   const cashDecision=emptyTitle==='空仓等待'&&rows.length===0;
   $('daily-watchlist-panel').classList.toggle('has-cash-decision',cashDecision);
   if(cashDecision)text('watch-priority-reason',emptyReason.replace(/^空仓等待[：:]\s*/,''));
+  updateWatchlistPresentation();
 }
 async function loadDailyWatchlist() {
   const date=state.historyDate,request=state.watchlistRequest=(state.watchlistRequest||0)+1;
