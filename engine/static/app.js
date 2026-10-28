@@ -28,7 +28,13 @@ const text = (id, value) => {const node=$(id); if(node) node.textContent = value
 const shortTime = value => {if(!value) return '—'; const d=new Date(value); return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString('zh-CN', {timeZone:'Asia/Shanghai', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false});};
 const symbolLabel = value => String(value || '').replace(/^(sh|sz|bj)(\d{6})$/i, (_, ex, code) => `${code}.${ex.toUpperCase()}`);
 function node(tag, className, content) {const n=document.createElement(tag); if(className)n.className=className; if(content !== undefined)n.textContent=String(content); return n;}
-function setChange(id, value, prefix='') {const n=$(id); n.textContent=prefix+percentage(value,true); n.classList.toggle('positive-text',Number(value)>0); n.classList.toggle('negative-text',Number(value)<0);}
+const marketChange = value => !numeric(value)?'—':`${Number(value)>0?'↑ ':Number(value)<0?'↓ ':'＝ '}${percentage(value,true)}`;
+function setChange(id, value, prefix='') {
+  const n=clear($(id));
+  if(prefix)n.append(node('span','change-date',prefix.trim()+' '));
+  n.append(node('span','market-change',marketChange(value)));
+  n.classList.toggle('positive-text',numeric(value)&&Number(value)>0);n.classList.toggle('negative-text',numeric(value)&&Number(value)<0);
+}
 function list(value) {return Array.isArray(value) ? value : value ? [value] : [];}
 function clear(n) {n.replaceChildren(); return n;}
 function message(value, error=false) {const n=$('toast'); n.textContent=String(value); n.classList.toggle('error',error); n.hidden=false; clearTimeout(message.timer); message.timer=setTimeout(()=>n.hidden=true,error?6500:4200);}
@@ -186,7 +192,7 @@ function renderStocks() {
     const eligible=shortEligible(s),tr=node('tr'); tr.tabIndex=0; tr.setAttribute('aria-label',`查看 ${s.name||s.symbol} ${eligible?'合格候选':'未通过研究，非推荐'}详情`);
     tr.addEventListener('click',()=>openStock(s)); tr.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openStock(s);}});
     const name=node('td'); name.append(node('span','stock-name',s.name || s.symbol),node('span','stock-code',symbolLabel(s.symbol))); tr.append(name);
-    const price=node('td'); price.append(node('span','price-primary',number(s.raw_close ?? s.close)),node('span',`price-sub ${Number(s.change_pct)>0?'positive-text':Number(s.change_pct)<0?'negative-text':''}`,percentage(s.change_pct,true))); tr.append(price);
+    const price=node('td'); price.append(node('span','price-primary',number(s.raw_close ?? s.close)),node('span',`price-sub ${Number(s.change_pct)>0?'positive-text':Number(s.change_pct)<0?'negative-text':''}`,marketChange(s.change_pct))); tr.append(price);
     const p=visiblePrediction(s.prediction), expected=node('td');expected.append(node('span',`price-primary ${eligible&&Number(p.expected_return_pct)>0?'positive-text':eligible&&Number(p.expected_return_pct)<0?'negative-text':''}`,percentage(p.expected_return_pct,true)),node('span','price-sub',!eligible?'未通过预测研究 · 非推荐':numeric(p.interval_low_pct)&&numeric(p.interval_high_pct)?`${percentage(p.interval_low_pct,true)} 至 ${percentage(p.interval_high_pct,true)}`:'区间尚不可用'));tr.append(expected);
     const validation=node('td');validation.append(node('span','price-primary',numeric(p.validation_aggregate?.mae_pct)?`${number(p.validation_aggregate.mae_pct)} 个百分点` : numeric(p.validation_mae_pct)?`${number(p.validation_mae_pct)} 个百分点`:'待验证'),node('span','price-sub',p.validation_protocol_complete?`${number(p.validation_aggregate.samples,0)} 个分段验证样本`:numeric(p.validation_samples)?`${number(p.validation_samples,0)} 样本 · 分段验证不足`:'验证样本不足'));tr.append(validation);
     const score=node('td');score.append(node('span','',number(s.score,0)),node('span','price-sub','技术分 / 非概率'));tr.append(score);
@@ -212,19 +218,19 @@ function drawChart(canvas, rawBars, options={}) {
   const pad={left:13,right:59,top:22,bottom:28}, cw=w-pad.left-pad.right,ch=h-pad.top-pad.bottom;
   const vals=bars.map(b=>Number(b.close)), max=Math.max(...vals), min=Math.min(...vals), spread=Math.max(max-min,max*.01,1), lo=min-spread*.13,hi=max+spread*.13;
   const x=i=>pad.left+i*cw/Math.max(1,bars.length-1), y=v=>pad.top+(hi-v)/(hi-lo)*ch;
-  ctx.font='9px "Segoe UI", "Microsoft YaHei", sans-serif';ctx.textBaseline='middle';
-  for(let i=0;i<5;i++){const val=lo+(hi-lo)*i/4,yy=y(val);ctx.strokeStyle='#edf0f4';ctx.lineWidth=1;ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(pad.left,yy);ctx.lineTo(w-pad.right,yy);ctx.stroke();ctx.fillStyle='#9aa8b9';ctx.textAlign='left';ctx.fillText(number(val),w-pad.right+9,yy);}
+  ctx.font='11px "Segoe UI", "Microsoft YaHei", sans-serif';ctx.textBaseline='middle';
+  for(let i=0;i<5;i++){const val=lo+(hi-lo)*i/4,yy=y(val);ctx.strokeStyle='#edf0f4';ctx.lineWidth=1;ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(pad.left,yy);ctx.lineTo(w-pad.right,yy);ctx.stroke();ctx.fillStyle='#475569';ctx.textAlign='left';ctx.fillText(number(val),w-pad.right+9,yy);}
   ctx.setLineDash([]);
   if(numeric(options.entryLow) && numeric(options.entryHigh)){
     const top=Math.max(pad.top,y(Number(options.entryHigh))),bottom=Math.min(h-pad.bottom,y(Number(options.entryLow)));
-    if(bottom>top){ctx.fillStyle='#5da88720';ctx.fillRect(pad.left,top,cw,bottom-top);ctx.strokeStyle='#70a99366';ctx.setLineDash([4,4]);[top,bottom].forEach(yy=>{ctx.beginPath();ctx.moveTo(pad.left,yy);ctx.lineTo(w-pad.right,yy);ctx.stroke();});ctx.setLineDash([]);}
+    if(bottom>top){ctx.fillStyle='#145b9114';ctx.fillRect(pad.left,top,cw,bottom-top);ctx.strokeStyle='#145b91';ctx.setLineDash([4,4]);[top,bottom].forEach(yy=>{ctx.beginPath();ctx.moveTo(pad.left,yy);ctx.lineTo(w-pad.right,yy);ctx.stroke();});ctx.setLineDash([]);}
   }
   const gradient=ctx.createLinearGradient(0,pad.top,0,h-pad.bottom);gradient.addColorStop(0,'#6b90bd22');gradient.addColorStop(1,'#6b90bd02');
   ctx.beginPath(); vals.forEach((v,i)=>i?ctx.lineTo(x(i),y(v)):ctx.moveTo(x(i),y(v)));ctx.lineTo(x(bars.length-1),h-pad.bottom);ctx.lineTo(x(0),h-pad.bottom);ctx.closePath();ctx.fillStyle=gradient;ctx.fill();
-  if(options.ma){ctx.beginPath();ctx.strokeStyle='#bc9e67';ctx.lineWidth=1.25;let started=false;bars.forEach((b,i)=>{const v=numeric(b.ma20)?Number(b.ma20):i>=19?vals.slice(i-19,i+1).reduce((a,b)=>a+b,0)/20:null;if(v!==null){started?ctx.lineTo(x(i),y(v)):ctx.moveTo(x(i),y(v));started=true;}});ctx.stroke();}
-  ctx.beginPath();ctx.strokeStyle='#426893';ctx.lineWidth=1.8;vals.forEach((v,i)=>i?ctx.lineTo(x(i),y(v)):ctx.moveTo(x(i),y(v)));ctx.stroke();
-  const last=vals.length-1;ctx.beginPath();ctx.fillStyle='#426893';ctx.arc(x(last),y(vals[last]),3,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#99a7b8';ctx.font='9px "Segoe UI", sans-serif';const ticks=Math.min(4,bars.length);for(let i=0;i<ticks;i++){const idx=Math.round(i*(bars.length-1)/Math.max(1,ticks-1));ctx.textAlign=i===0?'left':i===ticks-1?'right':'center';ctx.fillText(String(bars[idx].date||'').slice(5),x(idx),h-10);}
+  if(options.ma){ctx.beginPath();ctx.strokeStyle='#9c3e00';ctx.lineWidth=2;ctx.setLineDash([6,4]);let started=false;bars.forEach((b,i)=>{const v=numeric(b.ma20)?Number(b.ma20):i>=19?vals.slice(i-19,i+1).reduce((a,b)=>a+b,0)/20:null;if(v!==null){started?ctx.lineTo(x(i),y(v)):ctx.moveTo(x(i),y(v));started=true;}});ctx.stroke();}
+  ctx.setLineDash([]);ctx.beginPath();ctx.strokeStyle='#145b91';ctx.lineWidth=2;vals.forEach((v,i)=>i?ctx.lineTo(x(i),y(v)):ctx.moveTo(x(i),y(v)));ctx.stroke();
+  const last=vals.length-1;ctx.beginPath();ctx.fillStyle='#145b91';ctx.arc(x(last),y(vals[last]),3,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#475569';ctx.font='11px "Segoe UI", sans-serif';const ticks=Math.min(4,bars.length);for(let i=0;i<ticks;i++){const idx=Math.round(i*(bars.length-1)/Math.max(1,ticks-1));ctx.textAlign=i===0?'left':i===ticks-1?'right':'center';ctx.fillText(String(bars[idx].date||'').slice(5),x(idx),h-10);}
 }
 
 function drawIndex(){const bars=list(state.dashboard?.index?.bars).slice(-state.range);$('index-chart-empty').hidden=bars.length>0;if(!bars.length && state.dashboard)text('index-chart-empty','沪指历史数据暂不可用，等待同步');drawChart($('index-chart'),bars,{ma:true});}
@@ -322,7 +328,7 @@ async function loadForecastAudit(){
 }
 function renderRuns(runs){const root=clear($('runs-list'));list(runs).slice(0,12).forEach(r=>{const row=node('div','run-row');row.append(node('strong','',shortTime(r.started_at||r.date)),node('span',`pill ${r.status==='success'?'positive':r.status==='error'?'negative':'neutral'}`,statusNames[r.status]||r.status||'—'),node('span','',`${r.target_date||''} · 成功 ${r.ok||0} / ${r.total||0}${r.failed?` · 失败 ${r.failed}`:''}${r.error?` · ${r.error}`:''}`));root.append(row);});if(!runs.length)root.append(node('div','fine-print','暂无运行记录。'));}
 
-async function loadQuotes(){try{const data=await api('/api/quotes');const ix=list(data.quotes).find(q=>q.symbol==='sh000001');const current=ix?`沪指 ${number(ix.price)} (${percentage(ix.change_pct,true)}) · 报价时间 ${shortTime(ix.datetime||ix.timestamp)}`:'暂无可用盘中报价';text('quote-status',`延时报价　${current}　｜　${data.status || '研究评分基于完整日线'}${data.fetched_at?` · 最近获取 ${shortTime(data.fetched_at)}`:''}`);}catch{ text('quote-status','延时报价暂不可用。研究评分基于完整日线；请勿把缓存行情当作实时成交价格。');}}
+async function loadQuotes(){try{const data=await api('/api/quotes');const ix=list(data.quotes).find(q=>q.symbol==='sh000001');const current=ix?`沪指 ${number(ix.price)} (${marketChange(ix.change_pct)}) · 报价时间 ${shortTime(ix.datetime||ix.timestamp)}`:'暂无可用盘中报价';text('quote-status',`延时报价　${current}　｜　${data.status || '研究评分基于完整日线'}${data.fetched_at?` · 最近获取 ${shortTime(data.fetched_at)}`:''}`);}catch{ text('quote-status','延时报价暂不可用。研究评分基于完整日线；请勿把缓存行情当作实时成交价格。');}}
 
 function renderTopPick(stocks) {
   const meta=state.dashboard?.meta||{},coverage=meta.coverage || {};
@@ -450,7 +456,7 @@ function watchText(value) {
 }
 function watchFacts(item={}) {
   const components=item.components||{},verification=item.verification||{},facts=[];
-  if(typeof components.return_5d_pct==='number'&&Number.isFinite(components.return_5d_pct))facts.push(`近5日${percentage(components.return_5d_pct,true)}`);
+  if(typeof components.return_5d_pct==='number'&&Number.isFinite(components.return_5d_pct))facts.push(`近5日${marketChange(components.return_5d_pct)}`);
   const reasons=list(item.reasons).map(watchText).join(' ');
   const extract=pattern=>{const match=reasons.match(pattern);return match&&Number.isFinite(Number(match[1]))?Number(match[1]):null;};
   const complete=verification.financial_complete===true&&verification.financial_data_date===item.asof;
@@ -481,6 +487,14 @@ function watchClientReveal(data,now=Date.now()) {
     && (shanghaiDay(new Date(prepared))!==data.data_date||prepared>=Date.parse(`${data.data_date}T16:00:00+08:00`))
     && (data.status==='cash'?items.length===0:items.length>0)&&items.length<=5&&items.every(item=>/^sh\d{6}$/.test(item?.symbol||'')
       && item.asof===data.data_date&&item.model_validated===false&&item.eligible===false&&item.actionable===false);
+}
+function renderWatchFacts(target,item) {
+  const facts=watchFacts(item),value=item.components?.return_5d_pct;
+  clear(target);
+  if(typeof value==='number'&&Number.isFinite(value)){
+    const first=`近5日${marketChange(value)}`;
+    target.append(node('span',value>0?'positive-text':value<0?'negative-text':'',first),node('span','',facts.slice(first.length)));
+  }else target.textContent=facts;
 }
 function applyWaveMarket() {
   const m=state.dashboard?.meta,w=m?.main_wave_market;
@@ -559,7 +573,7 @@ function renderDailyWatchlist(data,options={}) {
     if(top&&!withdrawn.has(top.symbol)){
       text('watch-priority-name',top.name||top.symbol);
       $('watch-priority-name').append(node('span','pick-symbol',` · ${symbolLabel(top.symbol)}`));
-      text('watch-priority-reason',watchFacts(top));
+      renderWatchFacts($('watch-priority-reason'),top);
       text('watch-priority-evidence',[...list(top.reasons).map(watchText),...conciseWatchNotes(top.risk_notes)].join('；'));
       $('watch-priority-open').onclick=()=>openStock(top);
       text('watch-priority-score',typeof top.score==='number'&&Number.isFinite(top.score)&&top.score>=0&&top.score<=100?`${number(top.score,1)} / 100`:'—');
@@ -573,7 +587,7 @@ function renderDailyWatchlist(data,options={}) {
       const rank=node('td','watch-rank',String(index+1));rank.setAttribute('aria-label',`排名 ${index+1}${removed?'，已撤销':''}`);tr.append(rank);name.append(node('span','stock-name',item.name||item.symbol),node('span','stock-code',symbolLabel(item.symbol)));tr.append(name);
       const qualityOnly=item.verification?.financial_quality_available===true&&item.verification?.financial_complete!==true;
       score.append(node('span','price-primary',typeof item.score==='number'&&Number.isFinite(item.score)&&item.score>=0&&item.score<=100?`${number(item.score,1)} / 100`:'—'),node('span','price-sub',`${removed?'原评分 · ':''}技术 ${numeric(components.technical)?number(components.technical,1):'未提供'} · ${qualityOnly?'财务质量':'财务'} ${numeric(components.financial)?number(components.financial,1):'未核验'}${qualityOnly?' · 估值待核验':''}`));tr.append(score);
-      tr.append(node('td','reference-reason',watchFacts(item)));
+      const facts=node('td','reference-reason');renderWatchFacts(facts,item);tr.append(facts);
       if(removed)risks.append(node('span','pill warn','已撤销'));
       const riskDetails=node('details','risk-details');riskDetails.append(node('summary','','分析详情'),node('p','',list(item.reasons).map(watchText).join('；')||'暂无详细依据。'),node('p','',conciseWatchNotes(item.risk_notes).join('；')||'暂无新增风险记录。'));riskDetails.append(node('p','',score.textContent));risks.append(riskDetails);const waveButton=node('button','text-button','完整分析 ↗');waveButton.addEventListener('click',()=>openStock(item));riskDetails.append(waveButton);tr.append(risks);body.append(tr);
     });
