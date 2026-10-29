@@ -57,20 +57,27 @@ def cohort(record,observed):
             'observed_at':observed.isoformat(),'preopen_visibility_verified':published<deadline and observed<deadline,
             'record':record}
 
-def inspect_rows(payload,symbol,period,observed):
+def inspect_rows(payload,symbol,period,observed,*,quarantine_pending=False):
     if not isinstance(payload,dict) or not isinstance(payload.get('data'),dict):raise ValueError('Minute data object required')
     entry=payload['data'].get(symbol)
     if not isinstance(entry,dict):raise ValueError('Minute symbol object required')
     rows=entry.get(period)
     if payload.get('code')!=0 or not isinstance(rows,list) or not 1<=len(rows)<=1024:
         raise ValueError('Minute response structure invalid')
-    previous=None
+    previous=None;past=[];pending=[]
     for row in rows:
         if not isinstance(row,list) or len(row)<6 or not re.fullmatch(r'\d{12}',str(row[0])):
             raise ValueError('Minute row invalid')
         stamp=dt.datetime.strptime(row[0],'%Y%m%d%H%M').replace(tzinfo=TZ)
         if previous and stamp<=previous:raise ValueError('Duplicate or unordered timestamps')
-        if stamp>observed:raise ValueError('Future timestamp')
+        if stamp>observed:
+            # Retain a possible open interval separately, never as a closed bar.
+            # This is a timestamp bound, not verification of provider semantics.
+            bound={'m1':1,'m5':5}.get(period,0)
+            if not quarantine_pending or stamp>observed+dt.timedelta(minutes=bound):
+                raise ValueError('Future timestamp')
+            pending.append(row)
+        else:past.append(row)
         previous=stamp
         # Only structural validation: do not infer OHLC field order, units or
         # interval boundaries from an undocumented response.
@@ -78,8 +85,12 @@ def inspect_rows(payload,symbol,period,observed):
             try:n=float(value)
             except (TypeError,ValueError):raise ValueError('Invalid numeric value')
             if not 0<=n<float('inf'):raise ValueError('Nonfinite or negative value')
-    return {'rows':rows,'first_timestamp':rows[0][0],'last_timestamp':rows[-1][0],
-            'count':len(rows),'semantics_verified':False,'usable_for_signals':False}
+    if len(pending)>1:raise ValueError('Multiple future intervals')
+    if not past:raise ValueError('No past observations')
+    return {'rows':past,'first_timestamp':past[0][0],'last_timestamp':past[-1][0],
+            'count':len(past),'pending_rows':pending,
+            'pending_reason':'timestamp_after_fetch' if pending else None,
+            'semantics_verified':False,'usable_for_signals':False}
 
 def previous_session(day):
     """Bound calendar access, but do not confuse long holidays with expiry."""
@@ -183,9 +194,11 @@ def collect(output=Path('research/intraday-evidence')):
                     try:
                         payload,digest=fetch(url);observed=dt.datetime.now(TZ)
                         receipt.update(fetched_at=observed.isoformat(),sha256=digest,raw_payload=payload)
-                        receipt.update(inspection=inspect_rows(payload,symbol,period,observed),status='collected')
-                    except (OSError,ValueError,KeyError,TypeError):
-                        receipt.update(status='error',fetched_at=dt.datetime.now(TZ).isoformat(),error='source_fetch_or_validation_failed')
+                        receipt.update(inspection=inspect_rows(payload,symbol,period,observed,quarantine_pending=True),status='collected')
+                    except (OSError,ValueError,KeyError,TypeError) as exc:
+                        receipt.setdefault('fetched_at',dt.datetime.now(TZ).isoformat())
+                        receipt.update(status='error',error='source_fetch_or_validation_failed')
+                        if 'raw_payload' in receipt and isinstance(exc,ValueError):receipt['validation_error']=str(exc)
                         report['errors'].append(symbol+':'+period)
                     report['sources'].append(receipt)
                     time.sleep(.3)
@@ -200,7 +213,7 @@ def collect(output=Path('research/intraday-evidence')):
     run=re.sub('[^0-9]','',os.environ.get('GITHUB_RUN_ID','local')) or 'local'
     name=started.strftime('%H%M%S%f')+'-'+run+'.json'
     with (folder/name).open('x',encoding='utf-8') as f:json.dump(report,f,ensure_ascii=False,allow_nan=False,separators=(',',':'))
-    print(json.dumps({'status':report['status'],'date':day,'sources':len(report['sources']),'errors':report['errors'],'path':str(folder/name)}))
+    print(json.dumps({'status':report['status'],'research_state':report['research_state'],'date':day,'sources':len(report['sources']),'errors':report['errors'],'path':str(folder/name)}))
     return report
 
 if __name__=='__main__':

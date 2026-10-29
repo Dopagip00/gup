@@ -8,6 +8,22 @@ from intraday_sampler import (cohort, inspect_rows, TZ, PROTOCOL, previous_sessi
                               read_archives, frozen_cohort, research_state, collect)
 
 class EvidenceTests(unittest.TestCase):
+    def test_possible_open_interval_is_quarantined_not_used(self):
+        rows=[['202610291000','10','10.1','10.2','9.9','100'],['202610291005','10','10.1','10.2','9.9','100']]
+        payload={'code':0,'data':{'sh000001':{'m5':rows}}}
+        now=dt.datetime(2026,10,29,10,1,57,tzinfo=TZ)
+        result=inspect_rows(payload,'sh000001','m5',now,quarantine_pending=True)
+        self.assertEqual(result['rows'],rows[:1]);self.assertEqual(result['pending_rows'],rows[1:])
+        self.assertFalse(result['usable_for_signals']);self.assertEqual(result['count'],1)
+        with self.assertRaises(ValueError):inspect_rows(payload,'sh000001','m5',now)
+
+    def test_future_quarantine_is_bounded_and_not_a_validation_bypass(self):
+        past=['202610291000','10','10.1','10.2','9.9','100']
+        now=dt.datetime(2026,10,29,10,1,57,tzinfo=TZ)
+        for future in ([['202610291010',*past[1:]]], [['202610291003',*past[1:]],['202610291005',*past[1:]]], [['202610291005','NaN',*past[2:]]]):
+            payload={'code':0,'data':{'sh000001':{'m5':[past,*future]}}}
+            with self.assertRaises(ValueError):inspect_rows(payload,'sh000001','m5',now,quarantine_pending=True)
+
     def test_bad_source_shapes_are_explicit_errors(self):
         now=dt.datetime(2026,10,28,9,45,tzinfo=TZ)
         for payload in (None,[],{'data':[]},{'data':{'sh600000':None}}):
