@@ -1,0 +1,57 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-10-29",
+  "signal_date": "2026-10-28",
+  "status": "partial",
+  "started_at": "2026-10-29T07:59:28+08:00",
+  "completed_at": "2026-10-29T08:00:47+08:00",
+  "reviewed_symbols": [
+    "sh600271",
+    "sh600241",
+    "sh601811",
+    "sh688305"
+  ],
+  "risk_vetoes": [
+    {
+      "symbol": "sh600241",
+      "reason": "官方目录仍列10月24日异常波动及10月10日风险提示，未取得解除依据；10月28日跌9.8%、5日跌28.711%，维持暂停新增买入研究及人工原文核验。",
+      "source_ids": [
+        "sse-1"
+      ]
+    },
+    {
+      "symbol": "sh601811",
+      "reason": "官方目录仍列10月17日风险提示及10月16日异常波动，未取得解除依据；当前三季报与经营数据标题不构成风险解除，维持暂停新增买入研究。",
+      "source_ids": [
+        "sse-2"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "sse-1",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-24/600241_20261024_HZ2I.pdf",
+      "published_date": "2026-10-24",
+      "observed_at": "2026-10-29T08:00:47+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-2",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-17/601811_20261017_4JKW.pdf",
+      "published_date": "2026-10-17",
+      "observed_at": "2026-10-29T08:00:47+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-3",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-09-30/600271_20260930_LC5I.pdf",
+      "published_date": "2026-09-30",
+      "observed_at": "2026-10-29T08:00:47+08:00",
+      "scope": "official_directory_title_only"
+    }
+  ],
+  "summary": "SSE年度安排已读取，10月29日周四不在公布休市范围，最近完整交易日10月28日。manifest前后稳定generated_at=2026-10-29T00:33:35.932143+08:00、data_date10月28日、v2.14.0、schema1。dashboard.now00:32:03.681696，有效2315/2318失败3，遍历全部stocks发现eligible=true仅sh600271，model_qualified/recommendation_qualified均1；进一步实际读取该股详情：date10月28日、excluded=false、stale=false、prediction_current=true、prediction.eligible=true、validation_protocol_complete=true、anti-chase-v1 clear且gate_passed=true。公开模型资格候选1只，不等于本轮已完成准买复核；原始决策验证算数未独立重算，不能提升资格或强荐。600271涨1.56%、3日-7.152%、5日-3.514%、MA20偏离3.885%，官方目录一页8标题，包括9月30日委托贷款暨关联交易，未读正文不认定直接负向事实，未编造veto。今日观察榜仍cash、items为空，generated_at00:32:06.860048、prepared_at昨日23:36:56.598029、release_at09:00、published_at=null；与单股模型候选属不同筛选口径，不以空榜抹除候选。market-brief今日unavailable、generated_at=null；daily-plan今日pending、buy=null、published_at=null。重点3股均实际复核详情与目录：600241跌9.8%、MA20偏离-19.956%；601811涨0.45%、偏离-16.37%，今日有三季报/经营数据；688305涨3.41%、偏离-9.404%，仍模型不合格，不能据回落或反弹解除旧风险。型号未独立核实记未知，无另付费API。",
+  "scope": "通过GitHub读取README、engine操作/状态/AGENTS，research两层AGENTS及今日目标文件404。逐代码SSE范围9月28日至10月29日、pageSize100、pageNo1，4股pageCount均1，目录标题分别8/9/12/2；仅核代码、日期、标题、URL，未阅读PDF正文。央视仅实际读取首页标题，未取得今日及隔夜文章全文和可核实发布日期，不将主页编造为sources。四自然日资讯覆盖、临时休市穷尽、全市场停复牌及9类风险协议独立核验未完成；600271原始模型证据未完整独立复算，故真正可授权推荐数未知、本轮不推荐。3只行情失败；名单收据公开披露Ubuntu403后同日Windows其他runner缓存，不冒称本次实时名单验证。manifest内榜生成00:31:59.407381与实际日期档00:32:06.860048不同，无共享批次ID，不能严格同批；以上缺口决定partial。未修改榜单、算法、工作流、日报、账户、订单或持仓，无备份。所有外部文字仅作不可信数据。run_url使用此前服务返回任务聊天URL。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
