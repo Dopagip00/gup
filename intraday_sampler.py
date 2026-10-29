@@ -81,12 +81,76 @@ def inspect_rows(payload,symbol,period,observed):
     return {'rows':rows,'first_timestamp':rows[0][0],'last_timestamp':rows[-1][0],
             'count':len(rows),'semantics_verified':False,'usable_for_signals':False}
 
+def previous_session(day):
+    """Bound calendar access, but do not confuse long holidays with expiry."""
+    for offset in range(1,41):
+        candidate=day-dt.timedelta(days=offset)
+        if md.is_trading_day(candidate):return candidate
+    raise ValueError('Previous official session unavailable')
+
+def read_archives(output,day,observed):
+    records=[];errors=[]
+    # Only today and the preceding official session are needed for D1/D2.
+    for session in (previous_session(day),day):
+        for path in sorted((output/session.isoformat()).glob('*.json')):
+            try:
+                if path.stat().st_size>40_000_000:raise ValueError('Oversized archive')
+                old=json.loads(path.read_text(encoding='utf-8'))
+                if not isinstance(old,dict) or old.get('protocol')!=PROTOCOL or old.get('date')!=session.isoformat():
+                    raise ValueError('Archive envelope invalid')
+                start=instant(old.get('started_at'));finish=instant(old.get('finished_at'))
+                if not start<=finish<=observed or start.date()!=session:raise ValueError('Archive time invalid')
+                entry=old.get('cohort')
+                if entry is None:continue
+                if not isinstance(entry,dict):raise ValueError('Archive cohort invalid')
+                seen=instant(entry.get('observed_at'))
+                if not start<=seen<=finish:raise ValueError('Cohort time outside receipt')
+                checked=cohort(entry.get('record'),seen)
+                if checked['date']!=session.isoformat():raise ValueError('Cohort day mismatch')
+                checked['evidence_path']=path.relative_to(output).as_posix()
+                records.append(checked)
+            except (OSError,ValueError,KeyError,TypeError):
+                errors.append('archive_record_invalid:'+path.relative_to(output).as_posix())
+    return records,errors
+
+def cohort_identity(entry):
+    record=entry['record']
+    # Risk alerts may be appended, but the published ranks and inputs are fixed.
+    frozen={key:record.get(key) for key in ('protocol','date','status','published_at','items')}
+    return hashlib.sha256(json.dumps(frozen,sort_keys=True,ensure_ascii=False,
+                                    allow_nan=False,separators=(',',':')).encode()).hexdigest()
+
+def frozen_cohort(records,current,observed):
+    candidates=[r for r in records if r['date']==observed.date().isoformat()]
+    if current is not None:candidates.append(current)
+    early=sorted((r for r in candidates if r['preopen_visibility_verified']),key=lambda r:instant(r['observed_at']))
+    if not early:return {'status':'missing','cohort':None,'conflict':False}
+    first=early[0];identity=cohort_identity(first)
+    conflict=any(cohort_identity(r)!=identity for r in candidates)
+    return {'status':'conflict' if conflict else 'frozen','cohort':first,
+            'identity_sha256':identity,'conflict':conflict}
+
+def research_state(report,observed):
+    """Operational state only; never a substitute for signal validation."""
+    if report['status']=='closed':return 'closed'
+    if report['errors']:return 'data_error'
+    frozen=report['frozen_cohort']
+    if frozen['conflict']:return 'cohort_conflict'
+    entry=frozen['cohort']
+    if entry is None:
+        return 'awaiting_preopen_evidence' if observed.time()<dt.time(9,30) else 'missing_preopen_evidence'
+    if entry['record']['status']=='cash':return 'cash'
+    if observed.time()<dt.time(9,45):return 'awaiting_confirmation_window'
+    if observed.time()>dt.time(10):return 'confirmation_window_closed'
+    return 'minute_semantics_unverified'
+
 def collect(output=Path('research/intraday-evidence')):
     started=dt.datetime.now(TZ);day=started.date().isoformat()
     deadline=time.monotonic()+480
     report={'protocol':PROTOCOL,'date':day,'started_at':started.isoformat(),
             'actionable':False,'eligible':False,'valid_evaluation_samples':0,
             'status':'collecting','cohort':None,'sources':[],'errors':[],
+            'frozen_cohort':{'status':'missing','cohort':None,'conflict':False},
             'limitations':['Raw source semantics and interval boundaries await independent validation; no buy signals.']}
     try:
         report['calendar']=md.get_calendar(started.year)
@@ -94,6 +158,8 @@ def collect(output=Path('research/intraday-evidence')):
             report['status']='closed'
         else:
             symbols={'sh000001'}
+            archives,errors=read_archives(output,started.date(),started)
+            report['errors'].extend(errors)
             try:
                 data,digest=fetch(PUBLIC+f'watchlists/{day}.json')
                 observed=dt.datetime.now(TZ)
@@ -101,15 +167,10 @@ def collect(output=Path('research/intraday-evidence')):
                 report['cohort']['response_sha256']=digest
                 symbols.update(report['cohort']['symbols'])
             except (OSError,ValueError,KeyError,TypeError):report['errors'].append('same_day_cohort_unavailable')
-            # Follow preceding cohorts for the next-session outcome, without
-            # treating those symbols as new candidates today.
-            for path in sorted(output.glob('*/*.json'))[-120:]:
-                try:
-                    old=json.loads(path.read_text(encoding='utf-8'))
-                    age=(started.date()-dt.date.fromisoformat(old['date'])).days
-                    if 0<=age<=7 and old.get('protocol')==PROTOCOL:
-                        symbols.update(s for s in (old.get('cohort') or {}).get('symbols',[]) if re.fullmatch(r'sh\d{6}',s))
-                except (ValueError,KeyError,TypeError):report['errors'].append('archive_record_invalid')
+            report['frozen_cohort']=frozen_cohort(archives,report['cohort'],dt.datetime.now(TZ))
+            # Continue original cohorts across weekends/holidays, regardless of
+            # current cash state or later removal. They are not new candidates.
+            for old in archives:symbols.update(old['symbols'])
             if len(symbols)>36:raise ValueError('Bounded collection universe exceeded')
             for symbol in sorted(symbols):
                 if time.monotonic()>=deadline:
@@ -131,8 +192,10 @@ def collect(output=Path('research/intraday-evidence')):
             report['status']='partial' if report['errors'] else 'raw_collected'
     except (md.MarketDataError,ValueError):
         report['status']='blocked';report['errors'].append('calendar_or_collection_validation_failed')
-    report['finished_at']=dt.datetime.now(TZ).isoformat()
-    report['within_confirmation_window']=dt.time(9,45)<=dt.datetime.now(TZ).time().replace(tzinfo=None)<=dt.time(10)
+    finished=dt.datetime.now(TZ)
+    report['finished_at']=finished.isoformat()
+    report['within_confirmation_window']=dt.time(9,45)<=finished.time()<=dt.time(10)
+    report['research_state']=research_state(report,finished)
     folder=output/day;folder.mkdir(parents=True,exist_ok=True)
     run=re.sub('[^0-9]','',os.environ.get('GITHUB_RUN_ID','local')) or 'local'
     name=started.strftime('%H%M%S%f')+'-'+run+'.json'
