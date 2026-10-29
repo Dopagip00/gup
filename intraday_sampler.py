@@ -12,6 +12,7 @@ import urllib.request
 
 sys.path.insert(0,str(Path(__file__).resolve().parent/'engine'))
 import market_data as md
+import intraday_selection as selection
 
 TZ=dt.timezone(dt.timedelta(hours=8))
 PUBLIC='https://dopagip00.github.io/gup/data/'
@@ -155,6 +156,30 @@ def research_state(report,observed):
     if observed.time()>dt.time(10):return 'confirmation_window_closed'
     return 'minute_semantics_unverified'
 
+def select_research(report,output,now):
+    states=[]
+    for path in sorted((output/report['date']).glob('*.json')):
+        saved=json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(saved,dict):raise ValueError('Invalid selection journal')
+        if saved.get('selection_error'):raise ValueError('Unresolved selection journal error')
+        if 'selection' in saved:
+            state=saved['selection']
+            if instant(state['checked_at'])>instant(saved['finished_at']):
+                raise ValueError('Selection after receipt')
+            states.append(state)
+    previous=selection.restore(states,report['date'],now)
+    frozen=report['frozen_cohort'];entry=frozen.get('cohort')
+    record=(report.get('cohort') or {}).get('record') or {}
+    vetoes={s:'watchlist_risk_withdrawal' for s in record.get('withdrawn_symbols',[])}
+    for alert in record.get('alerts',[]):
+        if alert.get('withdrawn') is True:vetoes[alert['symbol']]=alert.get('reason') or 'watchlist_risk_withdrawal'
+    # No source row is promoted to a verified confirmation. The independent
+    # minute/reference verifier must supply assessments in a subsequent phase.
+    return selection.advance(previous,now=now,cohort_id=frozen.get('identity_sha256'),
+        symbols=entry['symbols'] if entry else [],assessments={},vetoes=vetoes,
+        ready=report['status']=='raw_collected' and frozen['status']=='frozen',
+        reason=report['research_state'])
+
 def collect(output=Path('research/intraday-evidence')):
     started=dt.datetime.now(TZ);day=started.date().isoformat()
     deadline=time.monotonic()+480
@@ -209,6 +234,12 @@ def collect(output=Path('research/intraday-evidence')):
     report['finished_at']=finished.isoformat()
     report['within_confirmation_window']=dt.time(9,45)<=finished.time()<=dt.time(10)
     report['research_state']=research_state(report,finished)
+    try:
+        report['selection']=select_research(report,output,finished)
+    except (OSError,ValueError,TypeError,KeyError,AttributeError):
+        report['selection_error']='selection_journal_or_input_invalid'
+        report['errors'].append(report['selection_error'])
+        report['status']='partial';report['research_state']='data_error'
     folder=output/day;folder.mkdir(parents=True,exist_ok=True)
     run=re.sub('[^0-9]','',os.environ.get('GITHUB_RUN_ID','local')) or 'local'
     name=started.strftime('%H%M%S%f')+'-'+run+'.json'

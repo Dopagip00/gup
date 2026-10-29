@@ -9,7 +9,7 @@ import shutil
 import sqlite3
 
 HERE=Path(__file__).resolve().parent
-ENGINE_FILES={'app.py','core.py','daily_plan.py','daily_watchlist.py','main_wave.py','technical_diagnosis.py','factor_screen.py','market_brief.py','forecast.py','strategy.py','market_data.py','longterm.py',
+ENGINE_FILES={'app.py','core.py','daily_plan.py','daily_watchlist.py','main_wave.py','intraday_selection.py','technical_diagnosis.py','factor_screen.py','market_brief.py','forecast.py','strategy.py','market_data.py','longterm.py',
               'research_refresh.py','model_refresh.py','forecast_audit.py','portability.py','agent_runner.py','cloud_sync.py','version.json',
               'runtime.ps1','start.cmd','start.ps1','stop.cmd','stop.ps1','backup.cmd','backup.ps1',
               'update-now.cmd','update-now.ps1','apply-update.cmd','apply-update.ps1','MIGRATION.md',

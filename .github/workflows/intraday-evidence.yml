@@ -2,7 +2,7 @@ name: Intraday prospective evidence
 on:
   push:
     branches: [main]
-    paths: ['intraday_sampler.py', 'tests/test_intraday_sampler.py', '.github/workflows/intraday-evidence.yml']
+    paths: ['intraday_sampler.py', 'engine/intraday_selection.py', 'engine/tests/test_intraday_selection.py', 'tests/test_intraday_sampler.py', '.github/workflows/intraday-evidence.yml']
   schedule:
     # Beijing time: pre-open evidence, confirmation attempts, closing follow-up.
     # Late runs are retained with their actual time, never backdated signals.
@@ -30,7 +30,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Validate evidence contracts
-        run: python -m unittest discover -s tests -p test_intraday_sampler.py
+        run: |
+          python -m unittest discover -s tests -p test_intraday_sampler.py
+          PYTHONPATH=engine python -m unittest discover -s engine/tests -p test_intraday_selection.py
       - name: Collect with real timestamps
         id: sample
         run: python intraday_sampler.py

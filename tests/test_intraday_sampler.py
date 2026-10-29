@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from intraday_sampler import (cohort, inspect_rows, TZ, PROTOCOL, previous_session,
-                              read_archives, frozen_cohort, research_state, collect)
+                              read_archives, frozen_cohort, research_state, collect, select_research)
+import intraday_selection as selection
 
 class EvidenceTests(unittest.TestCase):
     def test_possible_open_interval_is_quarantined_not_used(self):
@@ -56,6 +57,34 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):inspect_rows(payload,'sh600000','m5',now)
 
 class ArchiveTests(unittest.TestCase):
+    def test_saved_selection_is_revoked_without_replacement_on_next_run(self):
+        now=dt.datetime(2026,10,29,9,45,tzinfo=TZ)
+        entry=self.entry();frozen=frozen_cohort([entry],None,now)
+        cid=frozen['identity_sha256'];symbol='sh600000'
+        evidence={'protocol':'intraday-confirmation-evidence-v1','symbol':symbol,'cohort_id':cid,
+                  'confirmed_at':now.isoformat(),'observed_at':now.isoformat(),
+                  'checks':{key:True for key in selection.CHECKS}}
+        locked=selection.advance(None,now=now,cohort_id=cid,symbols=[symbol],
+                                 assessments={symbol:evidence},vetoes={},ready=True)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);path=self.write_record(root,entry)
+            saved=json.loads(path.read_text());saved.update(selection=locked,finished_at=now.isoformat())
+            path.write_text(json.dumps(saved))
+            current=self.entry(clock='09:55');current['record']['withdrawn_symbols']=[symbol]
+            report={'date':entry['date'],'frozen_cohort':frozen,'cohort':current,
+                    'status':'raw_collected','research_state':'minute_semantics_unverified'}
+            result=select_research(report,root,now+dt.timedelta(minutes=10))
+            self.assertEqual(result['status'],'revoked');self.assertEqual(result['selected'],locked['selected'])
+            self.assertEqual(result['revocation']['reason'],'watchlist_risk_withdrawal')
+
+    def test_raw_collector_never_creates_a_verified_confirmation(self):
+        now=dt.datetime(2026,10,29,9,55,tzinfo=TZ);entry=self.entry()
+        report={'date':entry['date'],'frozen_cohort':frozen_cohort([entry],None,now),
+                'cohort':entry,'status':'raw_collected','research_state':'minute_semantics_unverified'}
+        with tempfile.TemporaryDirectory() as folder:
+            result=select_research(report,Path(folder),now)
+        self.assertIsNone(result['selected']);self.assertFalse(result['eligible'])
+
     def entry(self,day='2026-10-29',clock='09:20',symbols=('sh600000',)):
         record={'protocol':'daily-observation-v1','date':day,'status':'watch_only' if symbols else 'cash',
                 'published_at':day+'T09:12:00+08:00','items':[{'symbol':s} for s in symbols]}
