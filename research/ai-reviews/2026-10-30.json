@@ -1,0 +1,15 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-10-30",
+  "signal_date": "2026-10-29",
+  "status": "partial",
+  "started_at": "2026-10-30T07:57:28+08:00",
+  "completed_at": "2026-10-30T07:58:06+08:00",
+  "reviewed_symbols": [],
+  "risk_vetoes": [],
+  "sources": [],
+  "summary": "年度SSE休市安排实际读取，10月30日周五不在年度休市范围，最近完整交易日10月29日；临时公告核验尚缺。公开manifest前后generated_at均2026-10-30T00:42:41.913404+08:00，data_date10月29日，app_version2.14.0。dashboard.meta.now=2026-10-30T00:40:34.009850+08:00，遍历2318条stocks，eligible为零；model_qualified与recommendation_qualified均0，protocol_complete2254。没有通过验证的买入建议，不推荐。行情2314成功、4失败，candidate_ok2231不是推荐数，meta.stale=true。今日日期榜及主榜cash、items空、top_pick空，generated_at00:40:38.190144，prepared_at昨日23:42:14.646772，release_at今日09:00，published_at=null。消息接口今日unavailable、generated_at=null、items空；日报pending。实际运行模型由运行环境标示gpt-6.1-sol，未另调用付费API。",
+  "scope": "GitHub读取README、engine操作/状态/AGENTS；research两层AGENTS与今日目标文件404，读取main当前头。公共数据由云端内存HTTP实际读取，不读本机文件。仅年度日历与公开数据预检查完成；三只重点股详情、SSE公司公告分页及央视文章全文、至少四日资讯、临时公告、全市场停复牌未完成，故reviewed_symbols为空，sources为空，不冒称已核验公告。央视仅实际读取首页，不编造主页发布日期。今日无veto条目不构成解除此前600241/601811否决，不以未查到风险解除旧风险。不同生成时刻且共享批次ID未核准，不声称严格同批。08点前结束未达complete条件，保留partial。历史经营质量不等于今日估值完整，风险调整未证明盈利。只写今日JSON，不改原榜/日报/算法/工作流/订单/持仓，无备份。run_url沿用此前服务返回真实任务聊天URL。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
