@@ -1,0 +1,53 @@
+name: Intraday prospective evidence
+on:
+  push:
+    branches: [main]
+    paths: ['intraday_sampler.py', 'tests/test_intraday_sampler.py', '.github/workflows/intraday-evidence.yml']
+  schedule:
+    # Beijing time: pre-open evidence, confirmation attempts, closing follow-up.
+    # Late runs are retained with their actual time, never backdated signals.
+    - cron: '10,20,35,45,55 1 * * 1-5'
+    - cron: '5 2 * * 1-5'
+    - cron: '10,35 7 * * 1-5'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: huyan-intraday-evidence
+  cancel-in-progress: false
+jobs:
+  collect:
+    if: github.repository == 'Dopagip00/gup' && github.ref == 'refs/heads/main' && vars.ENABLE_SCHEDULED_RESEARCH != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate evidence contracts
+        run: python -m unittest discover -s tests -p test_intraday_sampler.py
+      - name: Collect with real timestamps
+        id: sample
+        run: python intraday_sampler.py
+      - name: Persist prospective public evidence, including failures
+        if: always() && steps.sample.outcome != 'skipped'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d research/intraday-evidence ]; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- research/intraday-evidence
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Record prospective intraday source evidence'
+          for attempt in 1 2 3; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then exit 0; fi
+            sleep 2
+          done
+          exit 1
