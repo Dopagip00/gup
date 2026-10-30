@@ -326,7 +326,12 @@ def export_site(output_dir, service, engine_dir=None):
         watch_index.append({'date':date,'data_date':value.get('data_date'),'published_at':value.get('published_at')})
     write('data/watchlists.json',watch_index)
     write('data/forecast-audit.json',forecast_audit.evaluate(core))
-    write('data/longterm.json',service.longterm())
+    write('data/longterm.json',service.longterm(monthly=True))
+    with core.connect() as con:
+        longterm_months=con.execute("SELECT key,value FROM kv WHERE key LIKE 'longterm_month:%' ORDER BY key").fetchall()
+    for key,value in longterm_months:
+        month=key[len('longterm_month:'):]
+        if re.fullmatch(r'\d{4}-\d{2}',month):write('data/longterm-months/'+month+'.json',json.loads(value))
     write('data/quotes.json',{'quotes':[], 'status':'GitHub Pages 为收盘研究快照，不提供实时或盘中自动报价。'})
     write('data/config.json',{'hosted':True,'universe':'shanghai','watchlist':[],'refresh_minutes':5})
     from ai_review import public_status

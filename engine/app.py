@@ -77,7 +77,7 @@ def make_handler(service, port):
                     import forecast_audit
                     return self.send(forecast_audit.evaluate(core))
                 if url.path == '/api/longterm':
-                    return self.send(service.longterm())
+                    return self.send(service.longterm(monthly=True))
                 if url.path == '/api/agent':
                     return self.send(service.agent_state())
                 if url.path == '/api/export.csv':

@@ -47,7 +47,7 @@ def encode(value):
 
 
 def public_key(key):
-    return key in PUBLIC_KEYS or re.fullmatch(r'(?:daily_(?:plan|watchlist)|market_brief):\d{4}-\d{2}-\d{2}', key) is not None
+    return key in PUBLIC_KEYS or re.fullmatch(r'(?:daily_(?:plan|watchlist)|market_brief):\d{4}-\d{2}-\d{2}', key) is not None or re.fullmatch(r'longterm_month:\d{4}-\d{2}',key) is not None
 
 
 def clean_value(key, value):
@@ -339,6 +339,17 @@ def restore_watchlists(path, core):
     cohorts=checked_watchlists(archive.get('watchlists'))
     if archive.get('schema_version')!=1 or archive.get('sha256')!=hashlib.sha256(canonical(cohorts).encode()).hexdigest():
         raise ValueError('观察榜档案完整性校验失败')
+    months=archive.get('longterm_months',{})
+    if months:
+        if archive.get('longterm_sha256')!=hashlib.sha256(canonical(months).encode()).hexdigest():
+            raise ValueError('长线月榜档案校验失败')
+        with core.connect() as con:
+            con.execute('BEGIN IMMEDIATE')
+            for month,value in months.items():
+                key='longterm_month:'+month
+                row=con.execute('SELECT value FROM kv WHERE key=?',(key,)).fetchone()
+                merged=merge_longterm_month(json.loads(row[0]) if row else None,value,core.now())
+                con.execute('INSERT OR REPLACE INTO kv VALUES(?,?)',(key,canonical(merged)))
     for value in cohorts.values():
         if value.get('published_at'):merge_watchlist_risks(value,value,core.now())
     count=0
@@ -448,6 +459,35 @@ def merge_watchlist_risks(old, incoming, moment):
     return result
 
 
+def merge_longterm_month(old, incoming, moment):
+    def checked(value):
+        if (not isinstance(value,dict) or value.get('policy')!='longterm-quality-year-v1'
+                or not re.fullmatch(r'\d{4}-\d{2}',value.get('month',''))):raise ValueError('无效月榜')
+        created=dt.datetime.fromisoformat(value['created_at']);updated=dt.datetime.fromisoformat(value['checked_at'])
+        if created.tzinfo is None or updated.tzinfo is None or not created<=updated<=moment or created.strftime('%Y-%m')!=value['month']:
+            raise ValueError('无效月榜时间')
+        originals=value['original'];symbols=[r['symbol'] for r in originals]
+        if len(set(symbols))!=len(symbols) or any(not re.fullmatch(r'(?:sh|sz)\d{6}',s) for s in symbols):raise ValueError('无效月榜股票')
+        if [r['monthly_rank'] for r in originals]!=list(range(1,len(originals)+1)):raise ValueError('无效月榜顺序')
+        for event in value['events']:
+            when=dt.datetime.fromisoformat(event['observed_at'])
+            if event.get('kind')!='withdrawal' or event['symbol'] not in symbols or not event.get('reasons') or not created<=when<=updated:
+                raise ValueError('无效撤销记录')
+        return updated
+    right=checked(incoming)
+    if old is None:return json.loads(canonical(incoming))
+    left=checked(old)
+    for key in ('month','created_at','basis_date','original'):
+        if canonical(old[key])!=canonical(incoming[key]):raise ValueError('长线月榜原始记录冲突')
+    result=json.loads(canonical(incoming if right>left else old));events={}
+    for event in old['events']+incoming['events']:events[canonical(event)]=event
+    result['events']=sorted(events.values(),key=lambda e:(e['observed_at'],e['symbol']))
+    withdrawn={e['symbol'] for e in result['events']}
+    for row in result.get('stocks',[]):
+        if row['symbol'] in withdrawn:row.update(eligible=False,withdrawn=True)
+    return result
+
+
 def save_watchlists(core, path):
     if path.is_file():restore_watchlists(path,core)
     moment=core.now()
@@ -468,6 +508,11 @@ def save_watchlists(core, path):
     for value in cohorts.values():
         if value.get('published_at'):merge_watchlist_risks(value,value,core.now())
     archive={'schema_version':1,'watchlists':cohorts,'sha256':hashlib.sha256(canonical(cohorts).encode()).hexdigest()}
+    with core.connect() as con:
+        month_rows=con.execute("SELECT key,value FROM kv WHERE key LIKE 'longterm_month:%' ORDER BY key").fetchall()
+    if month_rows:
+        months={key[len('longterm_month:'):]:merge_longterm_month(None,json.loads(raw),moment) for key,raw in month_rows}
+        archive.update(longterm_months=months,longterm_sha256=hashlib.sha256(canonical(months).encode()).hexdigest())
     payload=canonical(archive)
     if len(payload.encode())>MAX_PLANS_BYTES:raise ValueError('观察榜档案超过大小限制')
     path.parent.mkdir(parents=True,exist_ok=True);path.write_text(payload,encoding='utf-8')
@@ -939,7 +984,7 @@ def run_stage(stage, core, service):
         latest_target = core.expected_date()
         previous = core.getkv('longterm', {})
         previous_coverage = previous.get('coverage', {})
-        same_complete = previous.get('as_of') == latest_target and previous_coverage.get('valuation_qualified', 0) > 0 and previous_coverage.get('financial_complete') == previous_coverage.get('valuation_qualified') and previous_coverage.get('not_researched', 0) == 0
+        same_complete = previous.get('policy') == 'longterm-quality-year-v1' and previous.get('as_of') == latest_target and previous_coverage.get('valuation_qualified', 0) > 0 and previous_coverage.get('financial_complete') == previous_coverage.get('valuation_qualified') and previous_coverage.get('not_researched', 0) == 0
         if same_complete:
             quote_check = fast_valuations(core, latest_target)
             result.update(status='cached', finished_at=core.now().isoformat(), as_of=latest_target, target_date=latest_target,

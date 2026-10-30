@@ -36,6 +36,8 @@ def refresh_fundamentals():
     result['quote_coverage'] = {'total': len(universe), 'received': len(quotes), 'failed_batches': len(errors)}
     result['fetched_at'] = core.now().isoformat()
     core.putkv('longterm', result)
+    import longterm_policy
+    longterm_policy.refresh_board(core)
     return result
 
 

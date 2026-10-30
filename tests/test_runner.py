@@ -594,7 +594,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(core.getkv('morning_news'),result)
 
     def test_same_day_complete_financial_snapshot_reuses_reports_and_never_republishes_plan(self):
-        core=FakeCore();core.putkv('longterm',{'as_of':'2026-10-16','coverage':{'valuation_qualified':836,'financial_complete':836,'not_researched':0}})
+        core=FakeCore();core.putkv('longterm',{'as_of':'2026-10-16','policy':'longterm-quality-year-v1','coverage':{'valuation_qualified':836,'financial_complete':836,'not_researched':0}})
         with patch.object(runner,'fast_valuations',return_value={'received':2320}) as valuations,patch.object(runner.importlib,'import_module') as imports:
             result=runner.run_stage('fundamentals',core,Mock())
         self.assertEqual(result['status'],'cached');valuations.assert_called_once();imports.assert_not_called()
@@ -931,3 +931,18 @@ class BriefRunnerTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class LongtermArchiveTests(unittest.TestCase):
+    def test_recovery_preserves_withdrawal_and_rejects_changed_ranks(self):
+        base={'policy':'longterm-quality-year-v1','month':'2026-10','created_at':'2026-10-16T17:00:00+08:00',
+              'checked_at':'2026-10-16T17:00:00+08:00','basis_date':'2026-10-16',
+              'original':[{'symbol':'sh600001','monthly_rank':1}], 'events':[],
+              'stocks':[{'symbol':'sh600001','eligible':True}]}
+        withdrawn=json.loads(json.dumps(base));withdrawn['checked_at']='2026-10-17T17:00:00+08:00'
+        withdrawn['events']=[{'kind':'withdrawal','symbol':'sh600001','observed_at':withdrawn['checked_at'],'reasons':['risk']}]
+        now=dt.datetime(2026,10,18,17,tzinfo=runner.TZ)
+        result=runner.merge_longterm_month(withdrawn,base,now)
+        self.assertEqual(result['events'],withdrawn['events']);self.assertFalse(result['stocks'][0]['eligible'])
+        changed=json.loads(json.dumps(base));changed['original'][0]['symbol']='sh600002'
+        with self.assertRaises(ValueError):runner.merge_longterm_month(base,changed,now)

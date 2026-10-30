@@ -15,6 +15,7 @@ import time
 from urllib.parse import urlencode
 
 import market_data as md
+import longterm_policy
 
 API = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 REPORT = "RPT_F10_FINANCE_MAINFINADATA"
@@ -59,7 +60,7 @@ def _fetch_reports(symbol):
     params = {"reportName": REPORT, "columns": FIELDS,
               "filter": f'(SECURITY_CODE="{symbol[2:]}")',
               "sortColumns": "REPORT_DATE", "sortTypes": "-1",
-              "pageSize": 12, "pageNumber": 1, "source": "WEB", "client": "WEB"}
+              "pageSize": 20, "pageNumber": 1, "source": "WEB", "client": "WEB"}
     with _NETWORK_LOCK:
         delay = 0.25 - (time.monotonic() - _LAST_REQUEST)
         if delay > 0:
@@ -278,6 +279,7 @@ def refresh(universe, quotes, snapshot_date, max_candidates=None):
             coverage["financial_requested"] += 1
             records = _fetch_reports(stock["symbol"])
             item = _analyze(stock, quote, snapshot, records)
+            item['long_horizon'] = longterm_policy.assess(item, _published(records,stock['symbol'],snapshot))
             consecutive_errors = 0
         except (ValueError, OSError, RuntimeError) as exc:
             consecutive_errors += 1
@@ -294,7 +296,7 @@ def refresh(universe, quotes, snapshot_date, max_candidates=None):
         warnings.insert(0, f"本轮{len(stocks)-coverage['financial_complete']}只候选财务缺失或无法核验，展示缺失项并停止推荐。")
     if not coverage["eligible"]:
         warnings.insert(0, "当前没有同时通过估值、盈利质量、增长与数据完整性检查的长线候选。")
-    return {"as_of": snapshot, "stocks": stocks, "warnings": warnings, "coverage": coverage,
+    return {"as_of": snapshot, "stocks": stocks, "warnings": warnings, "coverage": coverage,"policy":longterm_policy.POLICY,
             "method": "先按同日普通PE/TTM PE与PB预筛，再对全部合格股以已公布财报重算TTM PE，结合完整年度ROE、TTM现金流/扣非利润和最新同比增长评分。",
             "screen_order": "估值预筛PE升序；默认核验全部估值合格股。未通过筛选的股票不代表较差。",
             "return_forecast": None, "source": API}

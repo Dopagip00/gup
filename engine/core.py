@@ -1029,8 +1029,11 @@ class Service:
         with connect() as con:
             return [dict(r) for r in con.execute('SELECT report_date AS date,COUNT(*)-1 AS count FROM signals GROUP BY report_date ORDER BY report_date DESC LIMIT 365')]
 
-    def longterm(self):
-        data = getkv('longterm', {'as_of': None, 'stocks': [], 'warnings': ['等待真实估值与已公告财报数据；不生成未经核验的长线推荐。']})
+    def longterm(self, monthly=False):
+        if monthly:
+            import longterm_policy
+            return longterm_policy.refresh_board(__import__(__name__))
+        data = getkv('longterm', {'as_of': None, 'stocks': [], 'warnings': ['等待真实估值与已公告财报数据']})
         if data.get('as_of') != expected_date():
             data = dict(data)
             data['warnings'] = list(data.get('warnings', [])) + ['长线快照未更新到最近完整交易日']

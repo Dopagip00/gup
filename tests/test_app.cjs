@@ -16,7 +16,7 @@ function app(options={}){
   document.getElementById('min-score').value='0';document.getElementById('stock-sort').value='prediction';
   class FixedDate extends Date{constructor(...args){super(...(args.length?args:[options.now??Date.now()]));}static now(){return options.now??Date.now();}}
   const sandbox={document,window:{PagesResearch:options.pages||{}},location:{hostname:'dopagip00.github.io'},structuredClone,URL,requestAnimationFrame:()=>{},Intl,Date:FixedDate,setTimeout,clearTimeout,fetch:()=>{throw Error('unexpected fetch');}};
-  vm.runInNewContext(source.slice(0,source.lastIndexOf("document.querySelectorAll('[data-view]')"))+"\nglobalThis.ui={state,shortEligible,renderStocks,renderDashboard,loadDashboard,renderPrediction,renderAIReview,renderTopPick,renderDailyWatchlist,loadDailyWatchlist,renderObservationDay,renderMarketBrief,loadMarketBrief,disableDisconnectedResearch,openStock,setApi:fn=>api=fn,setRenderDetail:fn=>renderDetail=fn};",sandbox);
+  vm.runInNewContext(source.slice(0,source.lastIndexOf("document.querySelectorAll('[data-view]')"))+"\nglobalThis.ui={state,loadLongterm,shortEligible,renderStocks,renderDashboard,loadDashboard,renderPrediction,renderAIReview,renderTopPick,renderDailyWatchlist,loadDailyWatchlist,renderObservationDay,renderMarketBrief,loadMarketBrief,disableDisconnectedResearch,openStock,setApi:fn=>api=fn,setRenderDetail:fn=>renderDetail=fn};",sandbox);
   return {ui:sandbox.ui,nodes,get:id=>document.getElementById(id)};
 }
 function stock(overrides={}){return {symbol:'sh601811',name:'技术分73的样本',score:73,date:'2026-10-16',eligible:false,prediction:{available:true,eligible:false,rank_value:null,expected_return_pct:5},entry_low:10,entry_high:11,stop_loss:9,take_profit:12,...overrides};}
@@ -480,4 +480,17 @@ test('cloud review never renders unsafe, credential-bearing or foreign links',()
   for(const run_url of ['javascript:alert(1)','http://chatgpt.com/c/x','https://chatgpt.com.evil.invalid/c/x','https://user:secret@chatgpt.com/c/x','https://chatgpt.com:8443/c/x','https://chatgpt.com/c/x?token=secret','https://chatgpt.com/c/x#secret','not a url']){
     a.ui.renderAIReview({status:'partial',run_url});assert.equal(a.get('ai-review-status').children.some(child=>child.tag==='a'),false);
   }
+});
+
+test('long-term monthly order survives daily scores and withdrawals stay visible',async()=>{
+  const a=app();a.ui.setApi(async()=>({month:'2026-10',as_of:'2026-10-29',stocks:[
+    stock({symbol:'sh600001',name:'原第一',score:60,rank_score:90,monthly_rank:1,eligible:true}),
+    stock({symbol:'sh600002',name:'原第二',score:99,rank_score:80,monthly_rank:2,eligible:true}),
+    stock({symbol:'sh600003',name:'撤销样本',monthly_rank:3,eligible:false,withdrawn:true,risks:['新增风险']})
+  ]}));await a.ui.loadLongterm();
+  assert.match(a.get('longterm-body').children[0].textContent,/原第一.*90/);
+  assert.match(a.get('longterm-body').children[1].textContent,/原第二.*80/);
+  assert.match(a.get('longterm-reference-body').textContent,/已撤销.*新增风险/);
+  assert.match(a.get('longterm-asof').textContent,/月榜.*一年跟踪/);
+  assert.match(a.get('longterm-evaluation').textContent,/待完整数据评价/);
 });
