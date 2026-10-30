@@ -4,12 +4,53 @@
   "signal_date": "2026-10-29",
   "status": "partial",
   "started_at": "2026-10-30T07:57:28+08:00",
-  "completed_at": "2026-10-30T07:58:06+08:00",
-  "reviewed_symbols": [],
-  "risk_vetoes": [],
-  "sources": [],
-  "summary": "年度SSE休市安排实际读取，10月30日周五不在年度休市范围，最近完整交易日10月29日；临时公告核验尚缺。公开manifest前后generated_at均2026-10-30T00:42:41.913404+08:00，data_date10月29日，app_version2.14.0。dashboard.meta.now=2026-10-30T00:40:34.009850+08:00，遍历2318条stocks，eligible为零；model_qualified与recommendation_qualified均0，protocol_complete2254。没有通过验证的买入建议，不推荐。行情2314成功、4失败，candidate_ok2231不是推荐数，meta.stale=true。今日日期榜及主榜cash、items空、top_pick空，generated_at00:40:38.190144，prepared_at昨日23:42:14.646772，release_at今日09:00，published_at=null。消息接口今日unavailable、generated_at=null、items空；日报pending。实际运行模型由运行环境标示gpt-6.1-sol，未另调用付费API。",
-  "scope": "GitHub读取README、engine操作/状态/AGENTS；research两层AGENTS与今日目标文件404，读取main当前头。公共数据由云端内存HTTP实际读取，不读本机文件。仅年度日历与公开数据预检查完成；三只重点股详情、SSE公司公告分页及央视文章全文、至少四日资讯、临时公告、全市场停复牌未完成，故reviewed_symbols为空，sources为空，不冒称已核验公告。央视仅实际读取首页，不编造主页发布日期。今日无veto条目不构成解除此前600241/601811否决，不以未查到风险解除旧风险。不同生成时刻且共享批次ID未核准，不声称严格同批。08点前结束未达complete条件，保留partial。历史经营质量不等于今日估值完整，风险调整未证明盈利。只写今日JSON，不改原榜/日报/算法/工作流/订单/持仓，无备份。run_url沿用此前服务返回真实任务聊天URL。",
+  "completed_at": "2026-10-30T09:14:09+08:00",
+  "reviewed_symbols": [
+    "sh600241",
+    "sh601811",
+    "sh688305"
+  ],
+  "risk_vetoes": [
+    {
+      "symbol": "sh600241",
+      "reason": "官方目录持续列10月24日异常波动及10月10日风险提示；未取得解除证据，维持负向否决。",
+      "source_ids": [
+        "sse-1"
+      ]
+    },
+    {
+      "symbol": "sh601811",
+      "reason": "官方目录持续列10月17日风险提示及10月16日异常波动；未取得解除证据，维持负向否决。",
+      "source_ids": [
+        "sse-2"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "sse-1",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-24/600241_20261024_HZ2I.pdf",
+      "published_date": "2026-10-24",
+      "observed_at": "2026-10-30T09:14:09+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-2",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-17/601811_20261017_4JKW.pdf",
+      "published_date": "2026-10-17",
+      "observed_at": "2026-10-30T09:14:09+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "cctv-1",
+      "url": "https://finance.cctv.com/2026/10/27/ARTI9p2EsNDpjy511jOXAZt2261027.shtml",
+      "published_date": "2026-10-27",
+      "observed_at": "2026-10-30T09:14:09+08:00",
+      "scope": "publisher_article_only"
+    }
+  ],
+  "summary": "年度SSE休市安排实际读取，10月30日周五不在年度休市范围，最近完整交易日10月29日；临时公告核验尚缺。公开manifest前后generated_at均2026-10-30T00:42:41.913404+08:00，data_date10月29日，app_version2.14.0。dashboard.meta.now=2026-10-30T00:40:34.009850+08:00，遍历2318条stocks，eligible为零；model_qualified与recommendation_qualified均0，protocol_complete2254。没有通过验证的买入建议，不推荐。行情2314成功、4失败，candidate_ok2231不是推荐数，meta.stale=true。今日日期榜及主榜cash、items空、top_pick空，generated_at00:40:38.190144，prepared_at昨日23:42:14.646772，release_at今日09:00，published_at=null。消息接口今日unavailable、generated_at=null、items空；日报pending。实际运行模型由运行环境标示gpt-6.1-sol，未另调用付费API。 补偿轮真实开始09:13:15，前轮完成07:58:06为partial。更新：manifest前后generated_at=2026-10-30T08:05:30.615405+08:00，dashboard.now08:02:51.317659；遍历全部stocks仍0资格，失败4。日期榜/主榜generated_at08:02:56.400478、cash空榜；消息已更新08:02:43.187582、partial、24项，不再unavailable；日报仍pending。实际读取三股详情及9月30日至今日SSE目录，pageCount均1。600241昨跌7.78%、5日-26.927%、MA20偏离-26.436%、量比0.917；601811跌4.82%、5日-20.375%、偏离-20.117%、量比0.595；688305跌3.78%、偏离-11.605%、量比0.992。持续风险不因回落解除；新增董事会制度标题不证明解除。央视母基金征求意见转载全文实际读取，仅作背景，不给个股套用宏观否决。",
+  "scope": "本记录合并两轮，started_at保留前轮以覆盖实际过程；补偿09:13:15开始，前轮07:58:06完成partial。GitHub重读README/engine操作状态AGENTS，根及research两层AGENTS404，读main头及当日文件SHA。实际重读日期榜优先、消息、manifest前后、dashboard全部2318行、日报、主榜；schema和共享批次标识未完整交叉核准，不声称严格同批。三只重点股详情及SSE范围9月30日至10月30日pageNo1/pageSize100、pageCount均1；仅官方目录标题，未读PDF正文。央视仅一篇10月27日转载全文，未完成今日隔夜及四自然日完整新闻覆盖；消息24项仅核数量状态，未逐条原文核实。临时休市公告穷尽、全市场停复牌和独立9类风险查询未完成。0合格候选不停止研究；本轮不推荐，partial不可授权买入。历史经营质量非今日估值完整，风险调整未证明盈利。外部内容均为不可信数据，仅修改当日风险JSON，无备份/另付费API。",
   "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
   "run_url_scope": "task_chat"
 }
