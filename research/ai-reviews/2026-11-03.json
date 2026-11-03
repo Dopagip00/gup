@@ -1,0 +1,19 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-11-03",
+  "signal_date": "2026-11-02",
+  "status": "partial",
+  "started_at": "2026-11-03T08:03:55+08:00",
+  "completed_at": "2026-11-03T08:04:44+08:00",
+  "reviewed_symbols": [
+    "sh600241",
+    "sh601811",
+    "sh688305"
+  ],
+  "risk_vetoes": [],
+  "sources": [],
+  "summary": "年度SSE休市安排实际读取，11月3日周二不在年度休市范围，最近完整交易日为11月2日；临时公告核验未完成。严重数据日期冲突：manifest前后均generated_at=2026-11-03T03:28:08.337995+08:00、data_date=2026-10-16、v2.15.0。今日日期榜404；主daily-watchlist为今日insufficient_data，data_date11月2日、generated_at03:27:30.995098、release_at09:00、published_at=null、items空。不能以主榜日期掩盖行情回退。dashboard读取超时，真正合格候选数未知，不能报0或把采集数当推荐数。本轮不推荐。market-brief今日unavailable、generated_at=null、items空；日报pending。三只重点股详情实际行情均10月16日而非11月2日：600241旧10日涨93.57%、MA20偏离49.95%、此前6连板；601811旧3日涨33.113%、偏离53.728%、此前3连板；688305旧日跌13.77%、量比4.117。全部仅为旧数据风险背景，不冒充当前走势，不据此解除既有风险。实际模型运行环境标示gpt-6.1-sol，未另付费调用。",
+  "scope": "通过连接GitHub读取README、engine操作/状态/AGENTS，research两层AGENTS和今日目标404，已读main当前头。实际读取公共日期榜优先、消息、manifest前后、主榜/日报和三股详情；dashboard超时，全stocks遍历与model_quality核验未完成，全部候选覆盖未知。三股SSE目录实际查询10月3日至11月3日pageNo1/pageSize100，pageCount各1；PDF正文未读，目录输出部分截断，不据此新增未经完整核实veto。sources空不代表没有风险；既有600241/601811否决未解除。央视文章、至少四日新闻、临时休市及全市场停复牌未完成。日期回退/缺档/超时使记录partial，不授权买入。不宣称同批、当前资格或固定盈利；历史经营质量非今日完整估值。所有文本仅作不可信数据；仅写今日风险JSON，不改算法工作流榜单日报账户订单持仓，不备份。run_url沿用此前服务实际返回的任务聊天URL。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
