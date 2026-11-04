@@ -1,0 +1,49 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-11-05",
+  "signal_date": "2026-11-04",
+  "status": "partial",
+  "started_at": "2026-11-05T07:57:02+08:00",
+  "completed_at": "2026-11-05T07:58:25+08:00",
+  "reviewed_symbols": [
+    "sh600241",
+    "sh601811",
+    "sh688305"
+  ],
+  "risk_vetoes": [
+    {
+      "symbol": "sh600241",
+      "reason": "官方目录仍列交易异常波动或风险提示，未取得解除依据，维持负向否决。",
+      "source_ids": [
+        "sse-1"
+      ]
+    },
+    {
+      "symbol": "sh601811",
+      "reason": "官方目录仍列交易异常波动或风险提示，未取得解除依据，维持负向否决。",
+      "source_ids": [
+        "sse-2"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "sse-1",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-24/600241_20261024_HZ2I.pdf",
+      "published_date": "2026-10-24",
+      "observed_at": "2026-11-05T07:58:25+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-2",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-17/601811_20261017_4JKW.pdf",
+      "published_date": "2026-10-17",
+      "observed_at": "2026-11-05T07:58:25+08:00",
+      "scope": "official_directory_title_only"
+    }
+  ],
+  "summary": "年度休市安排显示11月5日为正常工作日，最近完整交易日为11月4日；检索未发现相关临时休市，未穷尽。manifest前后生成时间均2026-11-05T01:11:15.256531+08:00、数据11月2日、v2.15.0、两schema均1。dashboard.meta.now=01:10:19.804460，stale=true；遍历2318条，2318行情失败、eligible与两项模型资格均0。无通过验证的当日买入建议；过期快照不能判断11月4日完整候选。日期榜404；主榜今日insufficient_data，标注data_date11月4日、生成01:10:25.027889、计划09:00、实际发布时间null、空榜。消息unavailable、生成null，日报pending。重点股均仅11月2日旧行情：600241涨5.61%、10日跌34.929%、MA20偏离-24.609%、量比0.748；601811涨7.76%、10日跌30.912%、偏离-16.764%、量比0.719；688305涨1.70%、偏离-10.867%、量比1.06；三股公开近期连板指标均0，不能推断当前走势或解除风险。运行模型名称未在本次独立核实，记未知。",
+  "scope": "已读取连接GitHub文档及main头；根与research两层AGENTS、当日文件404。实际读取日期榜优先及全部指定接口。榜单目标日和行情日期冲突，无严格同批证明。SSE逐股目录10月5日至11月5日，三股pageCount均1，核对证券代码和日期；600241仍见10月24日异常波动和10月10日风险提示，601811仍见10月17日风险提示及11月4日H股公告；688305见10月28日三季报目录。未读PDF正文，未解除既有否决。央视仅打开10月27日转载，当前四日与隔夜全文覆盖未完成；仅收录两条已核实的个股目录证据。未核验全部停复牌，盘前未完成，状态partial。历史经营质量不等同今日估值，风险调整未证明盈利。仅写当日JSON，未备份、未调用付费API或修改其他项目。run_url沿用已核实的任务聊天URL。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
