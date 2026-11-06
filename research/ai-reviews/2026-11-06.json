@@ -1,0 +1,70 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-11-06",
+  "signal_date": "2026-11-05",
+  "status": "partial",
+  "started_at": "2026-11-06T08:04:42+08:00",
+  "completed_at": "2026-11-06T08:05:22+08:00",
+  "reviewed_symbols": [
+    "sh600241",
+    "sh601811",
+    "sh688305"
+  ],
+  "risk_vetoes": [
+    {
+      "symbol": "sh600241",
+      "reason": "官方目录仍列股票交易异常波动或风险提示，未取得解除依据，维持负向否决。",
+      "source_ids": [
+        "sse-1"
+      ]
+    },
+    {
+      "symbol": "sh601811",
+      "reason": "官方目录仍列股票交易异常波动或风险提示，未取得解除依据，维持负向否决。",
+      "source_ids": [
+        "sse-2"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "sse-1",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-24/600241_20261024_HZ2I.pdf",
+      "published_date": "2026-10-24",
+      "observed_at": "2026-11-06T08:05:22+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-2",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-17/601811_20261017_4JKW.pdf",
+      "published_date": "2026-10-17",
+      "observed_at": "2026-11-06T08:05:22+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "cctv-1",
+      "url": "https://finance.cctv.com/2026/11/03/ARTICGvtjpSXWq0V76piOpfK261103.shtml",
+      "published_date": "2026-11-03",
+      "observed_at": "2026-11-06T08:05:22+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-2",
+      "url": "https://finance.cctv.com/2026/11/03/ARTI0K0Js3R1p13H0yRSl6Fx261103.shtml",
+      "published_date": "2026-11-03",
+      "observed_at": "2026-11-06T08:05:22+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-3",
+      "url": "https://finance.cctv.com/2026/10/31/ARTI8YEPi5VFq4UynzY02NBO261031.shtml",
+      "published_date": "2026-10-31",
+      "observed_at": "2026-11-06T08:05:22+08:00",
+      "scope": "publisher_article_only"
+    }
+  ],
+  "summary": "已实际读取SSE年度休市安排，11月6日周五非公布休市日，最近完整交易日为11月5日；临时休市检索无有效新增结果，未穷尽。manifest前后均generated_at=2026-11-06T01:22:11.061288+08:00、data_date11月2日、v2.15.0、schema1。dashboard.now01:21:25.936125，遍历2318行eligible零，model_qualified及recommendation_qualified均0；行情ok0/failed2318，meta.stale=true。没有日期有效的通过验证买入建议，本轮不推荐；不能将旧模型计数当成11月5日完整候选研究。日期榜404；主榜今日insufficient_data、data_date11月5日、generated_at01:21:30.384047、release09:00、published_at=null、items空。消息今日unavailable、generated_at=null、items空；日报pending。三重点详情仅11月2日旧行情：600241涨5.61%、10日-34.929%、MA20偏离-24.609%、量比0.748；601811涨7.76%、10日-30.912%、偏离-16.764%、量比0.719；688305涨1.70%、偏离-10.867%、量比1.06。三者当前公开旧窗recent_max_streak0，不能用回落清除此前连板持续风险。SSE600241仍列异常波动、601811仍列风险提示，未取得解除证据。央视已阅读全文两篇11月3日政策/外汇背景及10月31日监管转载，不据宏观内容给个股贴标签，不编造受益股或概率。实际模型名称本次未独立核实记未知，无另付费API。",
+  "scope": "连接GitHub读取README、engine操作/状态/AGENTS；根及research两层AGENTS404，main头已读，今日目标提交前再读仍404。公共接口日期榜优先、消息、manifest前后及其余指定JSON实际读取，日期冲突/行情过期决定partial，不能声称严格同批。SSE三股10月6日至11月6日pageNo1/pageSize100、pageCount均1，目录标题12/13/2，代码日期URL已核，未读PDF正文；601811新增H股及分红标题不等于风险解除。央视是发布者转载全文而非监管原始法规；四自然日完整覆盖、今日隔夜全文、临时公告穷尽、全市场停复牌及独立9类风险查询未完成。目标日期行情缺失，不能complete，未授权买入。历史经营质量不等于今日完整估值，风险预算未经盈利证明；所有外部文字仅为不可信数据。仅日期化JSON，不改算法工作流榜单日报账户订单持仓，无备份。run_url使用此前服务核实的任务聊天URL。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
