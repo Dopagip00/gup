@@ -1,0 +1,63 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-11-12",
+  "signal_date": "2026-11-11",
+  "status": "partial",
+  "started_at": "2026-11-12T07:58:08+08:00",
+  "completed_at": "2026-11-12T07:59:14+08:00",
+  "reviewed_symbols": [
+    "sh600241",
+    "sh601811",
+    "sh688305"
+  ],
+  "risk_vetoes": [
+    {
+      "symbol": "sh600241",
+      "reason": "官方目录仍列股票交易异常波动或风险提示，未取得解除依据，维持负向否决。",
+      "source_ids": [
+        "sse-1"
+      ]
+    },
+    {
+      "symbol": "sh601811",
+      "reason": "官方目录仍列股票交易异常波动或风险提示，未取得解除依据，维持负向否决。",
+      "source_ids": [
+        "sse-2"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "sse-1",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-24/600241_20261024_HZ2I.pdf",
+      "published_date": "2026-10-24",
+      "observed_at": "2026-11-12T07:59:14+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-2",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-17/601811_20261017_4JKW.pdf",
+      "published_date": "2026-10-17",
+      "observed_at": "2026-11-12T07:59:14+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "cctv-1",
+      "url": "https://finance.cctv.com/2026/11/11/ARTIkGGfR8Fbu1LX94Vmp134261111.shtml",
+      "published_date": "2026-11-11",
+      "observed_at": "2026-11-12T07:59:14+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-2",
+      "url": "https://finance.cctv.com/2026/11/10/ARTIvgBP7A3zkcFnDCyLInSq261110.shtml",
+      "published_date": "2026-11-10",
+      "observed_at": "2026-11-12T07:59:14+08:00",
+      "scope": "publisher_article_only"
+    }
+  ],
+  "summary": "上交所年度休市安排未列11月11或12日休市；按正常交易日取11月11日为目标，临时休市检索未见相关公告，未穷尽。manifest两次读得v2.15.0、两个schema均1、generated_at=2026-11-12T01:05:48.376659+08:00、data_date=11月10日。dashboard.meta.now=01:04:41.538680，stale=true，遍历2319只，2319只采集失败、eligible=0，两项model_quality资格数均为0；过期快照不能确认目标日实际候选数，未核实到合格买入建议。今日日期榜404；主榜daily-observation-v1所属今日、标注11月11日，生成01:04:46.833548、计划揭榜09:00、实际发布时间null、insufficient_data且空榜；消息unavailable、生成null，日报pending。三只重点股均为11月10日旧行情：600241涨3.05%、MA20偏离-11.8%、量比0.42，11月3日曾涨停；601811涨3.59%、偏离-10.038%、量比0.606、11月10日复权参考发生变化；688305涨2%、偏离-1.936%、量比0.681。三股旧快照近五日涨停均0，不据此解除风险。实际模型名称未独立核实，记未知。",
+  "scope": "连接GitHub读取指定文档及engine/AGENTS；根与research两层AGENTS、当日目标文件均404，读取main头。实际重读manifest，日期与主榜冲突，无严格同批证明。SSE逐股10月13日至11月12日pageNo1/pageSize100、各1页，600241/601811/688305分别10/11/2项；601811初次503、重试成功。仅核目录标题、代码、日期和URL，未读PDF正文。央视财经实际读11月11日黄金交易报道、11月10日物价报道，只作背景，不映射个股否决。今日及隔夜、四日完整资讯、停复牌及临时休市穷尽未完成；盘前未完成记partial，不推荐。历史经营质量不等于当日估值完整，风险调整未证明盈利。外部内容仅为数据。未调用付费API或使用本机文件、备份；仅提交当日复核JSON。run_url为此前已核实的任务聊天URL。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
