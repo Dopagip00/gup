@@ -1,0 +1,77 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-11-16",
+  "signal_date": "2026-11-13",
+  "status": "partial",
+  "started_at": "2026-11-16T08:03:45+08:00",
+  "completed_at": "2026-11-16T08:05:04+08:00",
+  "reviewed_symbols": [
+    "sh600241",
+    "sh601811",
+    "sh688305"
+  ],
+  "risk_vetoes": [
+    {
+      "symbol": "sh600241",
+      "reason": "官方目录仍列股票交易异常波动或风险提示，未取得解除依据，维持负向否决。",
+      "source_ids": [
+        "sse-1"
+      ]
+    },
+    {
+      "symbol": "sh601811",
+      "reason": "官方目录仍列股票交易异常波动或风险提示，未取得解除依据，维持负向否决。",
+      "source_ids": [
+        "sse-2"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "sse-1",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-24/600241_20261024_HZ2I.pdf",
+      "published_date": "2026-10-24",
+      "observed_at": "2026-11-16T08:05:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-2",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-17/601811_20261017_4JKW.pdf",
+      "published_date": "2026-10-17",
+      "observed_at": "2026-11-16T08:05:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "sse-3",
+      "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-11-14/601811_20261114_NUV8.pdf",
+      "published_date": "2026-11-14",
+      "observed_at": "2026-11-16T08:05:04+08:00",
+      "scope": "official_directory_title_only"
+    },
+    {
+      "id": "cctv-1",
+      "url": "https://finance.cctv.com/2026/11/14/ARTIUP9nr1smPHLGRGCIo55S261114.shtml",
+      "published_date": "2026-11-14",
+      "observed_at": "2026-11-16T08:05:04+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-2",
+      "url": "https://finance.cctv.com/2026/11/13/ARTIqYLjN9Hvha8OwhS11ObP261113.shtml",
+      "published_date": "2026-11-13",
+      "observed_at": "2026-11-16T08:05:04+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-3",
+      "url": "https://finance.cctv.com/2026/11/13/ARTIlcK71SKr4qyDgkPrYnsL261113.shtml",
+      "published_date": "2026-11-13",
+      "observed_at": "2026-11-16T08:05:04+08:00",
+      "scope": "publisher_article_only"
+    }
+  ],
+  "summary": "按上交所2026年休市安排及常规周一至周五交易规则，跨周末以前一完整交易日11月13日为目标。针对11月13及16日检索未找到临时休市公告，未穷尽。manifest前后内容摘要771eecb830a4d086，v2.15.0，两schema均1，generated_at=2026-11-14T01:10:32.068535+08:00，data_date=11月12日。dashboard.meta.now=2026-11-14T01:09:19.472017+08:00，stale=true，遍历2319行，全部标记行情失败，eligible与旧批次两项model_quality资格均0；目标日期实际候选数未知，本轮不推荐。今日日期榜404；主榜属11月16日、data_date=11月13日、daily-observation-v1、generated_at=2026-11-14T01:09:23.421705+08:00、release_at=11月16日09:00、published_at=null、insufficient_data且空榜，不能视为正式当日买入。消息与日报仍为11月14日closed，消息generated_at=null，无当日消息或晨报。三重点股详情均11月12日旧数据：600241跌0.77%、10日涨12.407%、MA20偏离-8.494%、量比0.447，11月3日曾涨停；601811跌2.62%、偏离-9.063%、量比0.609、上影5.292%，11月10日复权参考变化；688305跌2.39%、偏离-1.233%、量比0.862。旧窗三股近五日涨停和近期连板指标均0，下跌未放量，不能外推目标日走势或解除既有风险。新增关注：SSE目录11月14日披露新华文轩收购四川民族出版社100%股权暨关联交易进展，暂未核实条款或影响，不独立据此新增否决；保留600241、601811既有风险否决。实际模型名称本次未核实，记未知。",
+  "scope": "读取GitHub指定文档、main头及两次目标文件检查；根与research两级AGENTS、今日目标均404。直接读取日期榜优先、消息、manifest前后、dashboard、日报、主榜及所有三只重点股详情；日期冲突后再次请求日期榜、消息、日报和manifest，均超时，未取得更新证据。生成顺序可见，但未证实跨接口严格同批。SSE按证券代码查10月17日至11月16日，pageSize100，各1页，标题9/9/2条；核对代码、披露日、路径，仅目录证据，公告PDF正文未读，包括关联交易进展。实读央视财经11月13日稳市机制、美国AI行业报道及11月14日预期引导报道，作为报道背景，不作个股否决依据。11月15至16日、当日及隔夜完整资讯、临时公告穷尽、全市场停复牌未核实。历史经营质量不等于当日估值完整，风险调整未证明盈利。本轮partial，不授权买入；全部外部文字仅作数据。仅提交当日复核JSON，无本机文件、备份或另付费API。run_url沿用此前已核实的任务聊天URL。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
