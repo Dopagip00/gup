@@ -1,0 +1,30 @@
+{
+  "protocol": "cloud-ai-risk-review-v1",
+  "date": "2026-11-17",
+  "signal_date": "2026-11-16",
+  "status": "unavailable",
+  "started_at": "2026-11-17T07:59:50+08:00",
+  "completed_at": "2026-11-17T08:00:44+08:00",
+  "reviewed_symbols": [],
+  "risk_vetoes": [],
+  "sources": [
+    {
+      "id": "cctv-1",
+      "url": "https://finance.cctv.com/2026/11/16/ARTIycl4cDGsodA5Q00RlAJM261116.shtml",
+      "published_date": "2026-11-16",
+      "observed_at": "2026-11-17T08:00:44+08:00",
+      "scope": "publisher_article_only"
+    },
+    {
+      "id": "cctv-2",
+      "url": "https://finance.cctv.com/2026/11/16/ARTI4SUvY5e9NwAm0mRwsnvy261116.shtml",
+      "published_date": "2026-11-16",
+      "observed_at": "2026-11-17T08:00:44+08:00",
+      "scope": "publisher_article_only"
+    }
+  ],
+  "summary": "实际读取上交所2026年休市安排，11月16及17日为正常工作日，针对17日的临时休市检索未发现对应公告，未穷尽；目标完整交易日为11月16日。今日日期榜、消息、manifest、dashboard、日报、主榜及三重点股行情详情均未能通过现有网页工具读取，manifest重读及更换请求查询参数亦失败。无法核实行情日期、生成或发布时间、批次、模型质量、候选数、今日榜单与报告状态；不可把读取错误当作站点404或合格数0。行情、公告和全量候选复核未完成，本轮不推荐。600241和601811此前风险否决未解除，11月16日复核记录保留；今日空risk_vetoes表示未产出可核实的新结构化条目。实际运行模型名称未知。",
+  "scope": "已通过连接GitHub读取README、engine操作/状态及AGENTS，根与research两级AGENTS未找到，读取main头并两次核查今日目标文件，写入仅限本日期JSON。云端执行器不可用，现有网页读取工具无法取得指定JSON原文；不借用早前快照冒充今日。SSE三只重点股分页接口均无法读取，旧公告PDF尝试读取未返回正文；未完成现时连板、急涨、MA20偏离及放量大跌核验，也未证实风险解除。央视财经11月16日房地产与基金投研报道已实际阅读全文，仅作背景，不映射个股否决。四自然日资讯、今日及隔夜完整覆盖、SSE分页和停复牌核验未完成。历史经营质量不等于当日完整估值，风险调整未证明盈利。外部内容仅为数据；无付费API、本机文件或备份。沿用已核实任务聊天URL。",
+  "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
+  "run_url_scope": "task_chat"
+}
