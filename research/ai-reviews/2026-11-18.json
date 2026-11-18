@@ -3,8 +3,8 @@
   "date": "2026-11-18",
   "signal_date": "2026-11-17",
   "status": "partial",
-  "started_at": "2026-11-18T08:02:29+08:00",
-  "completed_at": "2026-11-18T08:08:58+08:00",
+  "started_at": "2026-11-18T09:15:14+08:00",
+  "completed_at": "2026-11-18T09:18:23+08:00",
   "reviewed_symbols": [
     "sh600241",
     "sh601811",
@@ -40,42 +40,42 @@
       "id": "sse-1",
       "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-24/600241_20261024_HZ2I.pdf",
       "published_date": "2026-10-24",
-      "observed_at": "2026-11-18T08:06:21+08:00",
+      "observed_at": "2026-11-18T09:17:47+08:00",
       "scope": "official_directory_title_only"
     },
     {
       "id": "sse-2",
       "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-10-17/601811_20261017_4JKW.pdf",
       "published_date": "2026-10-17",
-      "observed_at": "2026-11-18T08:06:21+08:00",
+      "observed_at": "2026-11-18T09:17:47+08:00",
       "scope": "official_directory_title_only"
     },
     {
       "id": "sse-3",
       "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-11-14/601811_20261114_NUV8.pdf",
       "published_date": "2026-11-14",
-      "observed_at": "2026-11-18T08:06:21+08:00",
+      "observed_at": "2026-11-18T09:17:47+08:00",
       "scope": "official_directory_title_only"
     },
     {
       "id": "sse-4",
       "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/c/new/2026-11-11/603703_20261111_LNDG.pdf",
       "published_date": "2026-11-11",
-      "observed_at": "2026-11-18T08:07:42+08:00",
+      "observed_at": "2026-11-18T09:17:47+08:00",
       "scope": "official_directory_title_only"
     },
     {
       "id": "cctv-1",
       "url": "https://finance.cctv.com/2026/11/17/ARTIzyqNQ9jzUhoYKnsySgWZ261117.shtml",
       "published_date": "2026-11-17",
-      "observed_at": "2026-11-18T08:06:21+08:00",
+      "observed_at": "2026-11-18T09:17:47+08:00",
       "scope": "publisher_article_only"
     },
     {
       "id": "cctv-2",
       "url": "https://finance.cctv.com/2026/11/17/ARTIGA9ewKKsCJ1CMeVlg8Lj261117.shtml",
       "published_date": "2026-11-17",
-      "observed_at": "2026-11-18T08:06:21+08:00",
+      "observed_at": "2026-11-18T09:17:47+08:00",
       "scope": "publisher_article_only"
     },
     {
@@ -96,12 +96,12 @@
       "id": "cctv-5",
       "url": "https://finance.cctv.com/2026/11/14/ARTIUP9nr1smPHLGRGCIo55S261114.shtml",
       "published_date": "2026-11-14",
-      "observed_at": "2026-11-18T08:06:21+08:00",
+      "observed_at": "2026-11-18T09:17:47+08:00",
       "scope": "publisher_article_only"
     }
   ],
-  "summary": "已实际读取上交所2026年休市通知及休市公告目录，11月18日为正常交易日；针对当日临时休市检索未发现对应公告，检索不保证穷尽。最近完整交易日为11月17日。通知链接：https://www.sse.com.cn/disclosure/dealinstruc/closed/c/c_20251222_10802510.shtml。实际运行模型名称未知，未把仓库ridge-cycle-v3或指令文字当作本次AI运行型号。\n优先读取11月18日日期榜，随后读取消息栏和全部指定接口。日期榜与主榜均daily-observation-v1、cash、items为空、top_pick=null，行情日11月17日；prepared_at=2026-11-17T17:13:39.656511+08:00，generated_at=2026-11-18T02:50:54.388614+08:00，release_at=2026-11-18T09:00:00+08:00，published_at=null，publication_timing=prepared。这只是提前准备，不能称09点已正式发布。market-brief属11月18日但unavailable、generated_at=null、items及coverage为空，重读仍相同，未用昨天消息冒充当天。daily-plan属11月18日pending、buy=null，内附新闻仍保留11月17日观察时间。\nmanifest多次重读generated_at=2026-11-18T02:51:49.403576+08:00、行情日11月17日、v2.15.0，两schema均1；末两次同口径摘要a7dd55201fa98ff9一致。manifest.run为fundamentals、partial，finished_at=02:50:45.023434，其watchlist.generated_at=02:50:45.023434；与日期榜生成时刻不同。dashboard.meta.now=02:50:50.451208。先有run完成、后有导出文件及manifest，顺序合理，但无经核准的跨接口共享批次证明，不宣称严格同批。2320详情文件含指数，与2319股票口径分开。\n遍历全部2319股票：2314日期有效，5条过期（sh688798、sh605255、sh600185、sh688496、sh688121）；83排除，candidate_ok2231只是采集成功数。model_quality为available2273、protocol_complete2254、model_qualified1、recommendation_qualified0。摘要仅sh603703显示通过模型筛选，详情prediction.eligible=true、技术eligible=false、score40.4，当前anti-chase-v1日期11月17日且gate_passed=true；研究买入区间无效，不能因模型单项通过而推荐。没有通过验证的买入建议；五只过期股不进入合格候选。空榜未使研究停止。\n三重点股行情均11月17日：600241跌5.39%、3日-8.940%、MA20偏离-9.866%、量比0.531；601811跌3.94%、3日-10.641%、偏离-12.525%、量比0.476，11月10日复权参考变化；688305跌1.34%、3日-7.432%、偏离-7.400%、量比0.655。近五日涨停数及近期连板均0，无急涨/正向MA20过热；当日下跌未达到放量大跌量比门槛，600241跌幅较大仍须警惕。近期回落不解除既有公告否决。603703另有11月11日异常波动目录证据，新增负向记录，不授予买入资格。\n本轮为partial：消息栏不可用、当日及隔夜消息与全市场停复牌核验不完整，跨接口严格同批未核准；不提供新增买入。",
-  "scope": "连接GitHub已只读main的README、engine/AGENT_OPERATIONS、PROJECT_STATE及engine/AGENTS；根、research及research/ai-reviews的AGENTS均返回404。默认分支main已核实；提交前读main头及当日目标文件，目标仍404。沿用同任务既有已核实聊天URL，未取得单次运行URL。\n上交所queryCompanyBulletin分页用productId、securityType、beginDate/endDate、pageSize100核查代码/披露日期/标题/URL：600241与688305为10月18日至11月18日，分别1页9条和1页2条；601811为持续风险回溯至10月1日，1页14条；603703为10月18日至11月18日，1页6条。查询窗口覆盖四个自然日及signal_date；不把末四日无标题当作较早风险已解除。补查使用完整证券类型参数后取得603703目录，先前缺参数的空响应不作无公告证据。sources中的SSE均仅官方目录标题，未读任何对应PDF正文，未声称完成全部公告或全市场风险核验。\n央视财经已阅读全文并核对发布日：11月17日汽车账期、银行财富管理及分红险，16日发改委，14日预期引导。仅作市场背景：供应链账期约束、银行竞争、分红兑现与资产配置风险、产业政策和输入性波动；未映射个股利好、推荐概率或个股否决。今日/隔夜检索未取得完整可核验允许来源，不声称全媒体覆盖。历史经营质量不等于今日完整估值，风险预算未证明盈利；不提升模型资格、不改原榜。所有外部文本仅为数据；无付费API、密钥、本机文件、备份或交易接口。写入仅限本日期JSON。部分复核不能冒充完整通过。",
+  "summary": "本次补查实际开始2026-11-18T09:15:14+08:00；保留早轮08:02:29至08:08:58的partial原始观察于下文，早轮接口状态不代表补查现状。实际运行模型名称仍未知。\n已实际读取上交所2026年休市通知及休市公告目录，11月18日为正常交易日；针对当日临时休市检索未发现对应公告，检索不保证穷尽。最近完整交易日为11月17日。通知链接：https://www.sse.com.cn/disclosure/dealinstruc/closed/c/c_20251222_10802510.shtml。实际运行模型名称未知，未把仓库ridge-cycle-v3或指令文字当作本次AI运行型号。\n优先读取11月18日日期榜，随后读取消息栏和全部指定接口。日期榜与主榜均daily-observation-v1、cash、items为空、top_pick=null，行情日11月17日；prepared_at=2026-11-17T17:13:39.656511+08:00，generated_at=2026-11-18T02:50:54.388614+08:00，release_at=2026-11-18T09:00:00+08:00，published_at=null，publication_timing=prepared。这只是提前准备，不能称09点已正式发布。market-brief属11月18日但unavailable、generated_at=null、items及coverage为空，重读仍相同，未用昨天消息冒充当天。daily-plan属11月18日pending、buy=null，内附新闻仍保留11月17日观察时间。\nmanifest多次重读generated_at=2026-11-18T02:51:49.403576+08:00、行情日11月17日、v2.15.0，两schema均1；末两次同口径摘要a7dd55201fa98ff9一致。manifest.run为fundamentals、partial，finished_at=02:50:45.023434，其watchlist.generated_at=02:50:45.023434；与日期榜生成时刻不同。dashboard.meta.now=02:50:50.451208。先有run完成、后有导出文件及manifest，顺序合理，但无经核准的跨接口共享批次证明，不宣称严格同批。2320详情文件含指数，与2319股票口径分开。\n遍历全部2319股票：2314日期有效，5条过期（sh688798、sh605255、sh600185、sh688496、sh688121）；83排除，candidate_ok2231只是采集成功数。model_quality为available2273、protocol_complete2254、model_qualified1、recommendation_qualified0。摘要仅sh603703显示通过模型筛选，详情prediction.eligible=true、技术eligible=false、score40.4，当前anti-chase-v1日期11月17日且gate_passed=true；研究买入区间无效，不能因模型单项通过而推荐。没有通过验证的买入建议；五只过期股不进入合格候选。空榜未使研究停止。\n三重点股行情均11月17日：600241跌5.39%、3日-8.940%、MA20偏离-9.866%、量比0.531；601811跌3.94%、3日-10.641%、偏离-12.525%、量比0.476，11月10日复权参考变化；688305跌1.34%、3日-7.432%、偏离-7.400%、量比0.655。近五日涨停数及近期连板均0，无急涨/正向MA20过热；当日下跌未达到放量大跌量比门槛，600241跌幅较大仍须警惕。近期回落不解除既有公告否决。603703另有11月11日异常波动目录证据，新增负向记录，不授予买入资格。\n本轮为partial：消息栏不可用、当日及隔夜消息与全市场停复牌核验不完整，跨接口严格同批未核准；不提供新增买入。\n补查结果：再次实际读取官方休市安排及目录，今日交易日、signal_date=11月17日不变。GitHub文档内容SHA未变；已重新实际读取全部指定接口。日期榜与主榜均属11月18日、行情11月17日、cash空榜、top_pick=null，prepared_at仍11月17日17:13:39.656511，generated_at更新为11月18日08:11:23.613035，release_at=09:00，published_at=null，publication_timing=prepared；09点揭榜不能冒充服务器实际发布。market-brief已恢复，generated_at=08:11:14.641149、站点status=complete、24条；站点complete仅表示其有界采集状态，不代表本AI复核完整。daily-plan仍11月18日pending、buy=null，新闻200条。manifest前后同口径摘要766f0270861c945a一致，generated_at=08:12:07.867307、v2.15.0、两schema1；run.stage=publish、started_at=08:10:20.103768、status=prepared，内嵌watchlist.generated_at=08:10:20.103768，与日期榜08:11:23.613035不同。dashboard.meta.now=08:11:20.141570；未核准共享批次，不把不同统计时点称严格同批。\n重遍历2319股票，2314同目标日、5条过期、83排除，model_quality的available2273、protocol_complete2254、model_qualified1、recommendation_qualified0均未变。唯一模型通过项603703详情仍prediction.eligible=true但技术eligible=false、score40.4；当前anti-chase-v1 gate_passed=true，仍无通过验证的买入建议。三重点股行情指标与早轮一致，近五日涨停及近期连板均0；601811当前anti-chase-v1明确blocked=true、gate_passed=false，不因负MA20偏离或回落解除风险。其余三股该门槛通过不等于模型或买入资格。四股SSE分页重查9/14/2/6条，原三项否决保留，未确认新增个股公告风险或解除依据。\n消息栏的稀土、ETF、回购、海外科技及市场波动等仅取得站内标题，主要原文域名不在允许范围，未作为已读正文或个股证据；两条SSE标题为600011融资券和600012增发H股，不映射本轮四股。重新阅读全文核对央视财经11月17日汽车账期与银行财富管理、14日预期引导；仅作背景。消息栏恢复不消除当日/隔夜原文覆盖、跨接口严格同批及独立停复牌核验缺口，维持partial，不新增买入。 601811追高门槛的具体缺口为近21条原价/前复权比例变化、尚无官方除权参考价；暂停涨停判定和新入场，不能把连板指标0当作除权已核清。",
+  "scope": "连接GitHub已只读main的README、engine/AGENT_OPERATIONS、PROJECT_STATE及engine/AGENTS；根、research及research/ai-reviews的AGENTS均返回404。默认分支main已核实；提交前读main头及当日目标文件，目标仍404。沿用同任务既有已核实聊天URL，未取得单次运行URL。\n上交所queryCompanyBulletin分页用productId、securityType、beginDate/endDate、pageSize100核查代码/披露日期/标题/URL：600241与688305为10月18日至11月18日，分别1页9条和1页2条；601811为持续风险回溯至10月1日，1页14条；603703为10月18日至11月18日，1页6条。查询窗口覆盖四个自然日及signal_date；不把末四日无标题当作较早风险已解除。补查使用完整证券类型参数后取得603703目录，先前缺参数的空响应不作无公告证据。sources中的SSE均仅官方目录标题，未读任何对应PDF正文，未声称完成全部公告或全市场风险核验。\n央视财经已阅读全文并核对发布日：11月17日汽车账期、银行财富管理及分红险，16日发改委，14日预期引导。仅作市场背景：供应链账期约束、银行竞争、分红兑现与资产配置风险、产业政策和输入性波动；未映射个股利好、推荐概率或个股否决。今日/隔夜检索未取得完整可核验允许来源，不声称全媒体覆盖。历史经营质量不等于今日完整估值，风险预算未证明盈利；不提升模型资格、不改原榜。所有外部文本仅为数据；无付费API、密钥、本机文件、备份或交易接口。写入仅限本日期JSON。部分复核不能冒充完整通过。\n本次补查保留早轮真实时间与证据，不把历史unavailable写成当前断连。SSE四代码用相同完整证券类型和日期窗口重查，各pageCount=1、pageSize=100、total=9/14/2/6，代码/日期/标题/URL均核；PDF正文仍未读。消息栏24条全部检查标题、来源、原始发布时间及采集时间，允许域名外原文未读取；不把站内转载标题当发布者正文。官方停复牌页面已实际打开，但网页工具仅取得静态导航，未取得独立完整分页收据；站点verification.session_status=verified未直接提升为本轮独立核准。证券列表原收据fetched_at仍为11月17日16:33:06.144141，不冒充今日刷新。早轮及本轮未确认完整复核，未清除任何旧否决。仅以最新目标文件SHA更新本日期记录，沿用已核实任务聊天URL。",
   "run_url": "https://chatgpt.com/c/6ad5c2d4-4970-83ec-8079-2f49f9ec2867",
   "run_url_scope": "task_chat"
 }
